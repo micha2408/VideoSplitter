@@ -22,7 +22,7 @@ public:
 private:
     Ui::SplitView *ui;
     QMap<int,QPixmap> map;
-    QMap<int,int> delay;
+    int delay;
     bool fillingMap;
     int sizePic;
     int speed;
@@ -34,10 +34,11 @@ public slots:
 private slots:
     void on_actionget_pictures_triggered();
     void on_actionprictures_to_grid_triggered();
-    void on_sliderFirst_valueChanged(int value);
-    void on_sliderLast_valueChanged(int value);
     void on_actionshow_gif_triggered();
     void updateGif();
+    void on_sortSlider_valueChanged(int value);
+    void lowerValueChanged(int value);
+    void upperValueChanged(int value);
 };
 
 #endif // SPLITVIEW_H

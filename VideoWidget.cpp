@@ -59,19 +59,28 @@ VideoWidget::VideoWidget(QWidget *parent)
     // libVLC initialisieren
     initVlc();
 
-    splitView = new SplitView(m_label);
-    splitView->hide();
-
 }
 
 void VideoWidget::menu_split_1024(bool)
 {
+    if(splitView)
+    {   // dont forget to cleanup the old...
+    } else
+    {
+        splitView = new SplitView(m_label);
+    }
     m_label->sendSize(1024);
     splitView->show();
 
 }
 void VideoWidget::menu_split_2048(bool)
 {
+    if(splitView)
+    {   // dont forget to cleanup the old...
+    } else
+    {
+        splitView = new SplitView(m_label);
+    }
     m_label->sendSize(2048);
     splitView->show();
 }

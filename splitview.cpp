@@ -17,14 +17,15 @@ SplitView::SplitView(Label *l)
     ui->setupUi(this);
     connect(l,&Label::sendPic,this,&SplitView::sendPic,Qt::QueuedConnection);
     connect(l,&Label::sendSize,this,&SplitView::sendSize,Qt::QueuedConnection);
-    ui->sliderFirst->blockSignals(true);
-    ui->sliderLast->blockSignals(true);
+    connect(ui->rangeSlider,&RangeSlider::lowerValueChanged,this,&SplitView::lowerValueChanged);
+    connect(ui->rangeSlider,&RangeSlider::upperValueChanged,this,&SplitView::upperValueChanged);
+    ui->rangeSlider->blockSignals(true);
 }
 
 void SplitView::sendSize(int sp)
 {
-    ui->sliderFirst->blockSignals(true);
-    ui->sliderLast->blockSignals(true);
+    ui->rangeSlider->blockSignals(true);
+    ui->sortSlider->blockSignals(true);
     sizePic=sp;
     map.clear();
     fillingMap = true;
@@ -36,19 +37,21 @@ void SplitView::sendPic(Label *l)
     Label::ImagePlus &ip=l->imagePlus;
     if(fillingMap)
     {
-        ui->sliderFirst->setRange(0,ip.count-1);
-        ui->sliderLast->setRange(0,ip.count-1);
-        ui->sliderFirst->setValue(ip.index);
-        ui->sliderLast->setValue(ip.index);
+        ui->sortSlider->setRange(1,ip.count/2);
+        ui->sortSlider->setValue(1);
+        ui->rangeSlider->setRange(0,ip.count-1);
+        ui->rangeSlider->setLowerValue(ip.index);
+        ui->rangeSlider->setUpperValue(ip.count-1);
+        if(map.size()==0) delay=0;
+        delay+=ip.delay;
         map[ip.index]=ip.image;
-        delay[ip.index]=ip.delay;
         if(map.size()==ip.count)
         {
+            delay/=map.size(); // mittlere verzögerung
+            ui->rangeSlider->setLowerValue(0);
+            ui->rangeSlider->blockSignals(false);
+            ui->sortSlider->blockSignals(false);
             fillingMap = false;
-            ui->sliderFirst->setValue(0);
-            ui->sliderLast->setValue(map.size()-1);
-            ui->sliderFirst->blockSignals(false);
-            ui->sliderLast->blockSignals(false);
             paintGrid();
         }
     }
@@ -56,6 +59,8 @@ void SplitView::sendPic(Label *l)
 
 SplitView::~SplitView()
 {
+//    QObject::disconnect(this);
+//    disconnect(ui->rangeSlider,nullptr,nullptr,nullptr);
     delete ui;
 }
 
@@ -72,30 +77,41 @@ void SplitView::on_actionprictures_to_grid_triggered()
 
 void SplitView::paintGrid()
 {
-    int first=ui->sliderFirst->value();
-    int last=ui->sliderLast->value();
-    if(first>last) qSwap(first,last);
+    int first=ui->rangeSlider->lowerValue();
+    ui->labelLower->setText(QString::number(first));
+    int last=ui->rangeSlider->upperValue();
+    ui->labelUpper->setText(QString::number(last));
+    int maxSort=(last-first+1)/2;
+    ui->sortSlider->setRange(1,maxSort);
+    int indexSort = ui->sortSlider->value();
+    if(indexSort>maxSort)
+    {
+        indexSort = maxSort;
+        ui->sortSlider->setValue(indexSort);
+    }
+    ui->labelSort->setText(QString("%1/%2").arg(indexSort).arg(maxSort));
     int width1 = map[first].width();
     int height1 = map[first].height();
-    int area=width1*height1*(last-first+1);
-    int width=0;
-    int height=area;
-    while(width<height)
+    int area=0;
+    for(int i=first; i<(last-first+1); i+=ui->sortSlider->value())
     {
-        width += width1;
-        height = area/width;
+        area += width1*height1;
     }
-
-    if(width*height<area)
+    int width=width1;
+    int height=height1;
+    while(width*height<area)
     {
-        if((width + width1)*height < width*(height+height1))
+        if(width<height)
         {
-            width += width1;
+            width+=width1;
+            qDebug() << "w:" << width << height << width * height << area;
         } else
         {
-            height += height1;
+            height+=height1;
+            qDebug() << "h:" << width << height << width * height << area;
         }
     }
+
     setWindowTitle(QString("Grid w=%1*h=%2 count=%3 (%4..%5)").arg(width/width1).arg(height/height1).arg(last-first+1).arg(first).arg(last));
     QPixmap bigMap(width,height);
     QPainter p(&bigMap);
@@ -111,7 +127,7 @@ void SplitView::paintGrid()
             {
                 p.drawPixmap(iCol,iRow,map[nr]);
                 p.drawRect(QRect(iCol,iRow,width1-1,height1-1));
-                nr++;
+                nr+=ui->sortSlider->value();
             }
         }
     }
@@ -120,11 +136,11 @@ void SplitView::paintGrid()
 }
 
 
-void SplitView::on_sliderFirst_valueChanged(int value)
+void SplitView::lowerValueChanged(int value)
 {
-    if(value>ui->sliderLast->value())
+    if(value>=ui->rangeSlider->upperValue())
     {
-        ui->sliderFirst->setValue(ui->sliderLast->value());
+        ui->rangeSlider->setLowerValue(ui->rangeSlider->value()-1);
     } else
     {
         paintGrid();
@@ -132,11 +148,11 @@ void SplitView::on_sliderFirst_valueChanged(int value)
 }
 
 
-void SplitView::on_sliderLast_valueChanged(int value)
+void SplitView::upperValueChanged(int value)
 {
-    if(value<ui->sliderFirst->value())
+    if(value<=ui->rangeSlider->lowerValue())
     {
-        ui->sliderLast->setValue(ui->sliderFirst->value());
+        ui->rangeSlider->setUpperValue(ui->rangeSlider->value()+1);
     } else
     {
         paintGrid();
@@ -145,20 +161,29 @@ void SplitView::on_sliderLast_valueChanged(int value)
 
 void SplitView::updateGif()
 {
-    int index=ui->label->property("index").toInt();
-    ++index;
-
-    if(index>ui->sliderLast->value()) index=ui->sliderFirst->value();
-    ui->label->setProperty("index",index);
+    if(fillingMap) return;
+    int index=ui->rangeSlider->property("index").toInt();
     ui->label->setPixmap(map[index]);
-    QTimer::singleShot(delay[ui->sliderFirst->value()],this,&SplitView::updateGif);
+    QTimer::singleShot(delay*ui->sortSlider->value(),this,&SplitView::updateGif);
+    index += ui->sortSlider->value();
+    if(index>ui->rangeSlider->upperValue())
+    {   // wieder vorn anfangen
+        index=ui->rangeSlider->lowerValue();
+    }
+    ui->rangeSlider->setProperty("index",index); // index sichern
 }
 
 void SplitView::on_actionshow_gif_triggered()
 {
-    ui->label->setPixmap(map[ui->sliderFirst->value()]);
-    ui->label->setProperty("index",ui->sliderFirst->value());
-    QTimer::singleShot(delay[ui->sliderFirst->value()],this,&SplitView::updateGif);
-
+    // starten mit dem ersten value
+    ui->rangeSlider->setProperty("index",ui->rangeSlider->lowerValue()); // index sichern
+    updateGif();
 }
 
+
+void SplitView::on_sortSlider_valueChanged(int value)
+{
+    ui->labelSort->setText(QString("%1/%2").arg(value).arg(ui->sortSlider->maximum()));
+    paintGrid();
+
+}

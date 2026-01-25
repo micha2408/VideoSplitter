@@ -5,12 +5,14 @@ TEMPLATE = app
 TARGET   = VlcFrameGrabber
 
 SOURCES += \
+    RangeSlider.cpp \
     main.cpp \
     VideoWidget.cpp \
     splitview.cpp
 
 HEADERS += \
     Label.h \
+    RangeSlider.h \
     VideoWidget.h \
     splitview.h
 

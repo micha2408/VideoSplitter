@@ -1,3 +1,4 @@
+
 #include "splitview.h"
 #include "ui_splitview.h"
 #include "VideoWidget.h"
@@ -6,6 +7,9 @@
 #include <QPixmap>
 #include <Label.h>
 #include <QTimer>
+#include <QDateTime>
+#include <QRegularExpression>
+#include <QFileDialog>
 
 SplitView::SplitView(Label *l)
     : QMainWindow(nullptr)
@@ -20,6 +24,8 @@ SplitView::SplitView(Label *l)
     connect(ui->rangeSlider,&RangeSlider::lowerValueChanged,this,&SplitView::lowerValueChanged);
     connect(ui->rangeSlider,&RangeSlider::upperValueChanged,this,&SplitView::upperValueChanged);
     ui->rangeSlider->blockSignals(true);
+    connect(&previewTimer,&QTimer::timeout,this,&SplitView::previewGif);
+
 }
 
 void SplitView::sendSize(int sp)
@@ -27,7 +33,7 @@ void SplitView::sendSize(int sp)
     ui->rangeSlider->blockSignals(true);
     ui->sortSlider->blockSignals(true);
     sizePic=sp;
-    map.clear();
+    bigMap.clear();
     fillingMap = true;
 
 }
@@ -42,12 +48,13 @@ void SplitView::sendPic(Label *l)
         ui->rangeSlider->setRange(0,ip.count-1);
         ui->rangeSlider->setLowerValue(ip.index);
         ui->rangeSlider->setUpperValue(ip.count-1);
-        if(map.size()==0) delay=0;
+        if(bigMap.size()==0) delay=0;
         delay+=ip.delay;
-        map[ip.index]=ip.image;
-        if(map.size()==ip.count)
+        bigMap[ip.index]=ip.image;
+        qDebug() << "map index " << ip.index << " size " << bigMap.size() << " count " << ip.count;
+        if(bigMap.size()==ip.count)
         {
-            delay/=map.size(); // mittlere verzögerung
+            delay/=bigMap.size(); // mittlere verzögerung
             ui->rangeSlider->setLowerValue(0);
             ui->rangeSlider->blockSignals(false);
             ui->sortSlider->blockSignals(false);
@@ -59,22 +66,81 @@ void SplitView::sendPic(Label *l)
 
 SplitView::~SplitView()
 {
-//    QObject::disconnect(this);
-//    disconnect(ui->rangeSlider,nullptr,nullptr,nullptr);
     delete ui;
 }
 
 void SplitView::on_actionget_pictures_triggered()
 {
-    map.clear();
+    bigMap.clear();
     fillingMap = true;
 }
 
 
 void SplitView::on_actionprictures_to_grid_triggered()
 {
+    ui->label->pixmap(Qt::ReturnByValue).save(save.slName+".png");
 }
 
+QPixmap SplitView::composeGrid(int first, int count, int step)
+{
+    qDebug() << "compose";
+    previewTimer.stop();
+    previewList.clear();
+    count /= step;
+
+    int cols = std::ceil(std::sqrt(count));
+    int rows = std::ceil(double(count) / cols);
+
+    int cellW = sizePic / cols;
+    int cellH = sizePic / rows;
+
+    QPixmap result(sizePic, sizePic);
+    result.fill(Qt::transparent);
+    QPainter p(&result);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    for (int i = 0; i < count; ++i) {
+        int row = i / cols;
+        int col = i % cols;
+
+        QRect cell(col * cellW, row * cellH, cellW, cellH);
+
+        previewList << bigMap[first+i*step].scaled(
+            cell.size(),
+            Qt::KeepAspectRatio,
+            Qt::SmoothTransformation
+            );
+
+        // zentrieren in der Zelle
+        QPoint pos(
+            cell.x() + (cellW - previewList.last().width()) / 2,
+            cell.y() + (cellH - previewList.last().height()) / 2
+            );
+
+        p.drawPixmap(pos, previewList.last());
+    }
+    QSettings settings;
+    save.slName = settings.value("video").toString().remove(QRegularExpression("\\..*$"))
+                + QString("_%1x%2x%3x%4.png")
+                      .arg(rows)
+                      .arg(cols)
+                      .arg(count)
+                        .arg(1000/(delay*step));
+
+    previewTimer.start(delay*step);
+
+    return result;
+}
+
+#define NEW
+#ifdef NEW
+void SplitView::paintGrid()
+{
+    int first=ui->rangeSlider->lowerValue();
+    int last=ui->rangeSlider->upperValue();
+    int step=ui->sortSlider->value();
+    ui->label->setPixmap(composeGrid(first,last-first+1,step));
+}
+#else
 void SplitView::paintGrid()
 {
     int first=ui->rangeSlider->lowerValue();
@@ -114,27 +180,49 @@ void SplitView::paintGrid()
 
     setWindowTitle(QString("Grid w=%1*h=%2 count=%3 (%4..%5)").arg(width/width1).arg(height/height1).arg(last-first+1).arg(first).arg(last));
     QPixmap bigMap(width,height);
+
     QPainter p(&bigMap);
     QPen pen(Qt::red);
     p.setPen(pen);
     p.fillRect(bigMap.rect(),Qt::transparent);
     int nr=first;
     for(int iCol=0; iCol<width; iCol+=width1)
-    {
+    {   // row und col irgnedwie tauschen :)
         for(int iRow=0; iRow<height; iRow+=height1)
         {
             if(nr<=last)
             {
                 p.drawPixmap(iCol,iRow,map[nr]);
-                p.drawRect(QRect(iCol,iRow,width1-1,height1-1));
                 nr+=ui->sortSlider->value();
             }
         }
     }
     p.end();
     ui->label->setPixmap(bigMap.scaled(sizePic,sizePic));
+
+    previewMap.clear();
+    float gifWidth=float(sizePic) * float(width1) / float(width);
+    float gifHeight=float(sizePic) * float(height1) / float(height);
+    nr=first;
+    for(int iCol=0; iCol<sizePic; iCol+=int(gifWidth))
+    {
+        for(int iRow=0; iRow<sizePic; iRow+=int(gifHeight))
+        {
+            if(nr<=last)
+            {
+                previewMap[nr] = ui->label->pixmap(Qt::ReturnByValue).copy(iCol,iRow,gifWidth,gifHeight);
+                p.drawPixmap(iCol,iRow,map[nr]);
+                nr+=ui->sortSlider->value();
+            }
+        }
+    }
+    previewIndex=0;
+    previewGif();
+
+
 }
 
+#endif
 
 void SplitView::lowerValueChanged(int value)
 {
@@ -159,11 +247,21 @@ void SplitView::upperValueChanged(int value)
     }
 }
 
+void SplitView::previewGif()
+{
+    if(previewList.size())
+    {
+        QPixmap pm=previewList.takeFirst();
+        ui->labelPreview->setPixmap(pm);
+        previewList << pm;
+    }
+}
+
 void SplitView::updateGif()
 {
     if(fillingMap) return;
     int index=ui->rangeSlider->property("index").toInt();
-    ui->label->setPixmap(map[index]);
+    ui->label->setPixmap(bigMap[index]);
     QTimer::singleShot(delay*ui->sortSlider->value(),this,&SplitView::updateGif);
     index += ui->sortSlider->value();
     if(index>ui->rangeSlider->upperValue())

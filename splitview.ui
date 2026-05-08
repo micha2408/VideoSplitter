@@ -29,6 +29,12 @@
          <height>466</height>
         </rect>
        </property>
+       <property name="autoFillBackground">
+        <bool>false</bool>
+       </property>
+       <property name="styleSheet">
+        <string notr="true">background-color: blue;</string>
+       </property>
        <layout class="QGridLayout" name="gridLayout_2">
         <property name="leftMargin">
          <number>0</number>
@@ -100,6 +106,16 @@
       </property>
      </widget>
     </item>
+    <item row="1" column="0">
+     <widget class="QLabel" name="labelPreview">
+      <property name="text">
+       <string>preview</string>
+      </property>
+      <property name="scaledContents">
+       <bool>false</bool>
+      </property>
+     </widget>
+    </item>
    </layout>
   </widget>
   <widget class="QMenuBar" name="menubar">
@@ -141,7 +157,7 @@
   </action>
   <action name="actionprictures_to_grid">
    <property name="text">
-    <string>prictures to grid</string>
+    <string>save</string>
    </property>
   </action>
   <action name="actionshow_gif">

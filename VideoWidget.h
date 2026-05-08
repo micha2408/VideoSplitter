@@ -13,6 +13,7 @@
 #include <QList>
 
 #include <QElapsedTimer>
+#include <QSettings>
 
 class Label;
 class SplitView;
@@ -32,27 +33,43 @@ protected:
 
 private:
 
-//    QImage currentImage;
+    void doDropEvent(const QString &path);
     QPixmap currentpixMap;
     QElapsedTimer eTime;
     // libVLC
     libvlc_instance_t *m_vlcInstance = nullptr;
     libvlc_media_player_t *m_mediaPlayer = nullptr;
     libvlc_media_t *m_media = nullptr;
-
     // Framebuffer
     QMutex m_frameMutex;
-    QImage m_frame;          // letzter Frame als QImage
     int m_videoWidth = 1280; // Default (wird in Format-Callback gesetzt)
     int m_videoHeight = 720;
     int m_pitch = 0;         // Bytes pro Zeile
+    struct Frame
+    {
+        Frame()
+            : current(-1)
+            , count(-1)
+            , image(640,480,QImage::Format_ARGB32)
+        {
+            image.fill(Qt::black);
+        }
+        void newImage(int w, int h)
+        {
+            image=QImage(w,h,QImage::Format_ARGB32);
+        }
+        int current;
+        int count;
+        QImage image;          // letzter Frame als QImage
+    } frame;
+    int m_currentFrame;
     QMovie gif;
     Label *m_label;         // Anzeige des letzten Frames
     SplitView *splitView;
     // interne Hilfsfunktionen
     void initVlc();
     void releaseVlc();
-    void playFile(const QString &path);
+    bool playFile(const QString &path);
     void processFrame(const QImage &img, int index, int count);
 
     // statische Callback-Funktionen für libVLC
@@ -63,7 +80,7 @@ private:
                                    unsigned *width, unsigned *height,
                                    unsigned *pitches, unsigned *lines);
     static void formatCleanupCallback(void *opaque);
-    static void eventCallback(const libvlc_event_t* event, void* data);
+//    static void eventCallback(const libvlc_event_t* event, void* data);
 
 public slots:
     void menu_split_1024(bool);

@@ -5,6 +5,7 @@ TEMPLATE = app
 TARGET   = VlcFrameGrabber
 
 SOURCES += \
+    Label.cpp \
     RangeSlider.cpp \
     main.cpp \
     VideoWidget.cpp \
@@ -18,8 +19,8 @@ HEADERS += \
 
 # ----- libVLC Einbindung -----
 
-#VLC_SDK = D:/Qt/vlclibrary/sdk
-VLC_SDK = D:/Qt/vlc-4.0.0-dev/sdk
+VLC_SDK = D:/Qt/vlclibrary/sdk
+# VLC_SDK = D:/Qt/vlc-4.0.0-dev/sdk
 
 DEFINES += VLC_SDK_PATH=\\\"$$VLC_SDK\\\"
 

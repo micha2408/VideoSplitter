@@ -17,6 +17,10 @@
 #include "splitview.h"
 #include <Label.h>
 
+#include <QTimer>
+
+#include <QSettings>
+
 #define MENU(a,b,checkable)\
 {\
     QAction *act = menu->addAction( #a " " #b ) ;\
@@ -30,6 +34,10 @@ VideoWidget::VideoWidget(QWidget *parent)
     , splitView(nullptr)
 {
     setWindowTitle("VLC Frame Grabber (Qt 5)");
+    QCoreApplication::setOrganizationName("michaelSW");
+    QCoreApplication::setOrganizationDomain("uyuni.de");
+    QCoreApplication::setApplicationName("FrameGrabber");
+
     QMenuBar *bar = new QMenuBar(this);
     setMenuBar(bar);
     QMenu *menu = new QMenu("menu",bar);
@@ -49,12 +57,13 @@ VideoWidget::VideoWidget(QWidget *parent)
     layout->addWidget(m_label);
     setCentralWidget(central);
 
+    QMetaObject::invokeMethod(this, [this]
+        {
+            QSettings settings;
+            doDropEvent(settings.value("video").toString());
+        }, Qt::QueuedConnection);
     // Drag & Drop aktivieren
     setAcceptDrops(true);
-
-    // Voreinstellung: schwarzes Bild
-    m_frame = QImage(640, 360, QImage::Format_ARGB32);
-    m_frame.fill(Qt::black);
 
     // libVLC initialisieren
     initVlc();
@@ -94,87 +103,6 @@ void VideoWidget::menu_pause_video(bool checked)
     gif.setPaused(checked);
 }
 
-void Label::mousePressEvent(QMouseEvent *ev)
-{
-    origin = ev->pos();
-    if (ev->modifiers() & Qt::ControlModifier)
-    {
-        // STRG ist gedrückt
-        return;
-    }
-    if (!rubberBand)
-        rubberBand = new QRubberBand(QRubberBand::Rectangle, this);
-    saList << SelAdj();
-    rubberBand->setGeometry(QRect(origin, QSize()));
-    rubberBand->show();
-}
-
-void Label::mouseMoveEvent(QMouseEvent *ev)
-{
-    if (ev->modifiers() & Qt::ControlModifier)
-    {
-        setAdjustion(origin - ev->pos());
-        return;
-    }
-    if (rubberBand)
-        rubberBand->setGeometry(QRect(origin, ev->pos()).normalized());
-}
-
-void Label::mouseReleaseEvent(QMouseEvent *ev)
-{
-    if (ev->modifiers() & Qt::ControlModifier)
-    {
-        // STRG ist gedrückt
-        qDebug() << origin << ev->pos();
-        return;
-    }
-    if (!rubberBand) return;
-    rubberBand->hide();
-    QRect newSel = QRect(origin, ev->pos()).normalized();
-    if(newSel.width()<8)
-    {
-        resetSelection();
-        resetSelection();
-        return;
-    }
-    if(newSel.height()<8)
-    {
-        resetSelection();
-        resetSelection();
-        return;
-    }
-    setSelection(QRect(origin, ev->pos()).normalized());
-}
-
-void Label::paintEvent(QPaintEvent *e)
-{
-    if(imagePlus.image.isNull())
-    {
-        QLabel::paintEvent(e);
-        return;
-    }
-    QPainter p(this);
-    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    QPixmap scaled=imagePlus.image;
-    for(auto sa:saList)
-    {
-        scaled=scaled.copy(sa.selection);
-        scaled=scaled.scaled(
-                           size(),
-                           Qt::KeepAspectRatio,
-                           Qt::SmoothTransformation);
-    }
-    int x = (width() - scaled.width()) / 2;
-    int y = (height() - scaled.height()) / 2;
-    p.fillRect(rect(),QColor(Qt::blue));
-    sendPic(this);
-    p.drawPixmap(x, y, scaled);
-    p.setPen(QPen(Qt::red, 2));
-    p.drawRect(x, y, scaled.width(), scaled.height());
-
-
-}
-
 VideoWidget::~VideoWidget()
 {
     releaseVlc();
@@ -182,10 +110,6 @@ VideoWidget::~VideoWidget()
 
 void VideoWidget::initVlc()
 {
-    const char *vlc_args[] = {
-        "--no-xlib"
-    };
-
     wchar_t path[256];
     QString dllPath(QDir::toNativeSeparators(VLC_SDK_PATH "/lib"));
     dllPath.toWCharArray(path);
@@ -218,26 +142,28 @@ void VideoWidget::initVlc()
         &VideoWidget::formatCleanupCallback);
 
     libvlc_event_manager_t* eventManager = libvlc_media_player_event_manager(m_mediaPlayer);
-    libvlc_event_attach(eventManager, libvlc_MediaPlayerStopped, eventCallback, this);
+    libvlc_event_attach(eventManager, libvlc_MediaPlayerEndReached, [](const libvlc_event_t*, void*d)
+        {
+            auto self = static_cast<VideoWidget*>(d);
+            QMetaObject::invokeMethod(self->m_label, [self]
+                                      {
+                                          libvlc_media_player_stop(self->m_mediaPlayer);
+                                          libvlc_media_player_play(self->m_mediaPlayer);
+                                          self->frame.count=self->frame.current;
+                                          self->frame.current=0;
+                                      });
+
+        }, this );
 }
 
-void VideoWidget::eventCallback(const libvlc_event_t* event, void* data)
-{
-    VideoWidget* self = static_cast<VideoWidget*>(data);
 
-    if (event->type == libvlc_MediaPlayerStopped)
-    {
-        libvlc_media_player_set_media(self->m_mediaPlayer, self->m_media);
-        libvlc_media_player_play(self->m_mediaPlayer);
-    }
-}
 void VideoWidget::releaseVlc()
 {
     if (m_mediaPlayer) {
-#if (LIBVLC_VERSION_MAJOR == 3)
+#if (LIBVLC_VERSION_MAJOR == 4)
+        libvlc_media_player_stop_async(m_mediaPlayer);
+#else
         libvlc_media_player_stop(m_mediaPlayer);
-#elif (LIBVLC_VERSION_MAJOR == 4)
-    libvlc_media_player_stop_async(m_mediaPlayer);
 #endif
         libvlc_media_player_release(m_mediaPlayer);
         m_mediaPlayer = nullptr;
@@ -259,45 +185,46 @@ void VideoWidget::dragEnterEvent(QDragEnterEvent *event)
         event->acceptProposedAction();
 }
 
+void VideoWidget::doDropEvent(const QString &path)
+{
+    if (path.isEmpty()) return;
+    gif.stop();
+#if (LIBVLC_VERSION_MAJOR == 4)
+    libvlc_media_player_stop_async(m_mediaPlayer);
+#else
+    libvlc_media_player_stop(m_mediaPlayer);
+#endif
+    m_label->resetSelAdjList();
+    if(path.endsWith(".gif"))
+    {
+        gif.setFileName(path);
+        if(gif.isValid())
+        {
+            eTime.invalidate();
+            connect(&gif, &QMovie::frameChanged, this, [this](int)
+                    {
+                        processFrame(gif.currentImage(),gif.currentFrameNumber(),gif.frameCount());
+                    });
+            gif.start();
+        } else return;
+
+    } else
+    {
+        frame = Frame();
+        eTime.invalidate();
+        if(!playFile(path)) return;
+    }
+    QSettings settings;
+    settings.setValue("video",path);
+}
+
 void VideoWidget::dropEvent(QDropEvent *event)
 {
     const auto urls = event->mimeData()->urls();
     if (urls.isEmpty())
         return;
 
-    QString filePath = urls.first().toLocalFile();
-    if (!filePath.isEmpty())
-    {
-        if(filePath.endsWith(".gif"))
-        {
-            gif.stop();
-#if (LIBVLC_VERSION_MAJOR == 3)
-            libvlc_media_player_stop(m_mediaPlayer);
-#elif (LIBVLC_VERSION_MAJOR == 4)
-            libvlc_media_player_stop_async(m_mediaPlayer);
-#endif
-            gif.setFileName(filePath);
-            eTime.invalidate();
-            // gif.setCacheMode(QMovie::CacheAll);
-            connect(&gif, &QMovie::frameChanged, this, [this](int)
-            {
-                QImage frame = gif.currentImage();
-                processFrame(frame,gif.currentFrameNumber(),gif.frameCount());
-
-            });
-            gif.start();
-
-        } else
-        {
-            gif.stop();
-#if (LIBVLC_VERSION_MAJOR == 3)
-            libvlc_media_player_stop(m_mediaPlayer);
-#elif (LIBVLC_VERSION_MAJOR == 4)
-            libvlc_media_player_stop_async(m_mediaPlayer);
-#endif
-            playFile(filePath);
-        }
-    }
+    doDropEvent(urls.first().toLocalFile());
 }
 
 void VideoWidget::processFrame(const QImage &img, int index, int count)
@@ -309,12 +236,13 @@ void VideoWidget::processFrame(const QImage &img, int index, int count)
         m_label->update();
     } else eTime.start();
 }
-void VideoWidget::playFile(const QString &path)
+
+bool VideoWidget::playFile(const QString &path)
 {
     if (!m_vlcInstance || !m_mediaPlayer)
     {
         qWarning() << "VLC nicht initialisiert!";
-        return;
+        return false;
     }
 
     if (m_media)
@@ -324,17 +252,17 @@ void VideoWidget::playFile(const QString &path)
     }
 
     QByteArray ba = QDir::toNativeSeparators(path).toUtf8();
-#if (LIBVLC_VERSION_MAJOR == 3)
-    m_media = libvlc_media_new_path(m_vlcInstance, ba.constData());
-#elif (LIBVLC_VERSION_MAJOR == 4)
+#if (LIBVLC_VERSION_MAJOR == 4)
     m_media = libvlc_media_new_path(ba.constData());
+#else
+    m_media = libvlc_media_new_path(m_vlcInstance, ba.constData());
 #endif
+
     if (!m_media)
     {
         qWarning() << "Konnte Media nicht laden:" << path;
-        return;
+        return false;
     }
-
     libvlc_media_player_set_media(m_mediaPlayer, m_media);
     libvlc_media_player_play(m_mediaPlayer);
 }
@@ -347,12 +275,7 @@ void *VideoWidget::lockCallback(void *opaque, void **planes)
     VideoWidget *self = static_cast<VideoWidget*>(opaque);
     self->m_frameMutex.lock();
 
-    if (self->m_frame.isNull()) {
-        self->m_frame = QImage(self->m_videoWidth, self->m_videoHeight, QImage::Format_ARGB32);
-        self->m_frame.fill(Qt::black);
-    }
-
-    *planes = self->m_frame.bits();
+    *planes = self->frame.image.bits();
     return nullptr;
 }
 
@@ -371,24 +294,15 @@ void VideoWidget::displayCallback(void *opaque, void *picture)
     Q_UNUSED(picture);
     VideoWidget *self = static_cast<VideoWidget*>(opaque);
 
-    // Hier hast du den aktuellen Frame als QImage:
-    // self->m_frame
+    libvlc_media_stats_t p_stats;
+    libvlc_media_get_stats(self->m_media,&p_stats);
+    QMutexLocker locker(&self->m_frameMutex);
 
-    // Für Demo einfach im UI anzeigen:
-    QImage imgCopy;
-    {
-        QMutexLocker locker(&self->m_frameMutex);
-        imgCopy = self->m_frame.copy();
-    }
-
-    // Achtung: displayCallback läuft NICHT im GUI-Thread.
-    // Daher über QueuedConnection in den GUI-Thread:
-    QMetaObject::invokeMethod(self->m_label, [self, imgCopy]() {
-        self->m_label->setPixmap(QPixmap::fromImage(imgCopy).scaled(
-            self->m_label->size(),
-            Qt::KeepAspectRatio,
-            Qt::SmoothTransformation));
-    });
+    QMetaObject::invokeMethod(self->m_label, [self]
+                              {
+                                  self->processFrame(self->frame.image.copy(),self->frame.current,self->frame.count);
+                                  self->frame.current++;
+                              });
 }
 
 // Wird von VLC aufgerufen, um das Videoformat festzulegen
@@ -399,16 +313,16 @@ unsigned VideoWidget::formatCallback(void **opaque, char *chroma,
     VideoWidget *self = static_cast<VideoWidget*>(*opaque);
 
     // Wir wollen 32-bit RGB (RV32 = BGRA → QImage::Format_ARGB32 passt)
-#if (LIBVLC_VERSION_MAJOR == 3)
-    chroma[0] = 'R';
-    chroma[1] = 'V';
-    chroma[2] = '3';
-    chroma[3] = '2';
-#elif (LIBVLC_VERSION_MAJOR == 4)
+#if (LIBVLC_VERSION_MAJOR == 4)
     chroma[0] = 'B';
     chroma[1] = 'G';
     chroma[2] = 'R';
     chroma[3] = 'A';
+#else
+    chroma[0] = 'R';
+    chroma[1] = 'V';
+    chroma[2] = '3';
+    chroma[3] = '2';
 #endif
 
 
@@ -421,10 +335,7 @@ unsigned VideoWidget::formatCallback(void **opaque, char *chroma,
 
     // Frame-Buffer anlegen
     self->m_frameMutex.lock();
-    self->m_frame = QImage(self->m_videoWidth,
-                           self->m_videoHeight,
-                           QImage::Format_ARGB32);
-    self->m_frame.fill(Qt::black);
+    self->frame.newImage(self->m_videoWidth,self->m_videoHeight);
     self->m_frameMutex.unlock();
 
     return 1; // OK
@@ -432,7 +343,4 @@ unsigned VideoWidget::formatCallback(void **opaque, char *chroma,
 
 void VideoWidget::formatCleanupCallback(void *opaque)
 {
-    VideoWidget *self = static_cast<VideoWidget*>(opaque);
-    QMutexLocker locker(&self->m_frameMutex);
-    self->m_frame = QImage();
 }

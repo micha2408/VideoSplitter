@@ -8,12 +8,9 @@
 
 void Label::mousePressEvent(QMouseEvent *ev)
 {
+    if (ev->button() != Qt::LeftButton) return;
     origin = ev->pos();
-    if (ev->modifiers() & Qt::ControlModifier)
-    {
-        // STRG ist gedrückt
-        return;
-    }
+    if (ev->modifiers() & Qt::ControlModifier) return;
     if (!rubberBand)
         rubberBand = new QRubberBand(QRubberBand::Rectangle, this);
     rubberBand->setGeometry(QRect(origin, QSize()));
@@ -58,27 +55,43 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
         return;
     }
     QSize s;
-    scale(s.rwidth(),s.rheight());
-    saList<<SelAdj(newSel.adjusted(-s.width(),-s.height(),-s.width(),-s.height()));
+    scale(s.rwidth(), s.rheight());
+    const QRectF sel = QRectF(newSel).adjusted(-s.width(), -s.height(), -s.width(), -s.height());
+    saList << SelAdj(newSel.adjusted(-s.width(), -s.height(), -s.width(), -s.height()));
 
+    // Store crop in image pixel coordinates (immune to resize)
+    if (!imagePlus.image.isNull()) {
+        const QSize scaledSz = imagePlus.image.size().scaled(size(), Qt::KeepAspectRatio);
+        if (!scaledSz.isEmpty()) {
+            const double sw = static_cast<double>(imagePlus.image.width())  / scaledSz.width();
+            const double sh = static_cast<double>(imagePlus.image.height()) / scaledSz.height();
+            m_imageCropRect = QRect(
+                static_cast<int>(sel.x()      * sw),
+                static_cast<int>(sel.y()      * sh),
+                static_cast<int>(sel.width()  * sw),
+                static_cast<int>(sel.height() * sh)
+            ).intersected(imagePlus.image.rect());
+        }
+    }
+    update();
 }
 
 const QPixmap &Label::scale(int &x, int &y)
 {
     static QPixmap scaled;
-    scaled=imagePlus.image;
-    if(saList.isEmpty()) saList<<SelAdj(scaled.rect());
-    for(auto sa:saList)
-    {
-        scaled=scaled.copy(sa.selection.toRect());
-        scaled=scaled.scaled(
-            size(),
-            Qt::KeepAspectRatio,
-            Qt::SmoothTransformation);
+    scaled = imagePlus.image;
+    if (saList.isEmpty()) {
+        saList << SelAdj(scaled.rect());
+    } else {
+        // Keep saList[0] in sync with the actual image dimensions
+        saList[0].selection = scaled.rect();
+    }
+    for (auto sa : saList) {
+        scaled = scaled.copy(sa.selection.toRect());
+        scaled = scaled.scaled(size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
     x = (width() - scaled.width()) / 2;
     y = (height() - scaled.height()) / 2;
-
     return scaled;
 }
 

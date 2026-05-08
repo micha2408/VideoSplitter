@@ -1,6 +1,7 @@
 #include "VideoWidget.h"
 #include "Label.h"
 #include "RangeSlider.h"
+#include "ComfyBgRemover.h"
 
 #include <QDragEnterEvent>
 #include <QMimeData>
@@ -14,6 +15,8 @@
 #include <QActionGroup>
 #include <QPainter>
 #include <QSettings>
+#include <QFileInfo>
+#include <QFileDialog>
 #include <windows.h>
 #include <cmath>
 
@@ -43,6 +46,44 @@ VideoWidget::VideoWidget(QWidget *parent)
     act2048->setCheckable(true);
     resGroup->addAction(act2048);
     connect(act2048, &QAction::triggered, this, [this]{ m_resolution = 2048; });
+
+    QMenu *menuSave = new QMenu("Speichern", bar);
+    bar->addMenu(menuSave);
+    QAction *actSaveFrame  = menuSave->addAction("Aktuellen Frame …");
+    QAction *actSaveGrid   = menuSave->addAction("Sprite-Sheet …");
+    connect(actSaveFrame, &QAction::triggered, this, &VideoWidget::saveCurrentFrame);
+    connect(actSaveGrid,  &QAction::triggered, this, &VideoWidget::saveSpriteSheet);
+
+    QMenu *menuEdit = new QMenu("Bearbeiten", bar);
+    bar->addMenu(menuEdit);
+    QAction *actApplyCrop = menuEdit->addAction(
+        "Zuschnitt anwenden  (Pixel-Crop + Zeitbereich + Step)");
+    connect(actApplyCrop, &QAction::triggered, this, &VideoWidget::applyCrop);
+
+    QMenu *menuFx = new QMenu("Effekte", bar);
+    bar->addMenu(menuFx);
+
+    // Model selection submenu
+    QMenu *menuModel = menuFx->addMenu("BiRefNet Modell");
+    m_modelGroup = new QActionGroup(this);
+    m_modelGroup->setExclusive(true);
+    const QStringList models = {
+        "BiRefNet-general", "BiRefNet_512x512", "BiRefNet-HR",
+        "BiRefNet-portrait", "BiRefNet-matting", "BiRefNet-HR-matting",
+        "BiRefNet_lite", "BiRefNet_lite-2K", "BiRefNet_dynamic",
+        "BiRefNet_lite-matting", "BiRefNet_toonout"
+    };
+    for (const QString &m : models) {
+        QAction *a = menuModel->addAction(m);
+        a->setCheckable(true);
+        a->setChecked(m == "BiRefNet-general");
+        m_modelGroup->addAction(a);
+    }
+
+    menuFx->addSeparator();
+    m_actBgRemove = menuFx->addAction("Hintergrund entfernen (ComfyUI)");
+    m_actBgRemove->setEnabled(false);
+    connect(m_actBgRemove, &QAction::triggered, this, &VideoWidget::startBgRemoval);
 
     // ── Layout ──
     resize(1000, 680);
@@ -370,10 +411,33 @@ void VideoWidget::doDropEvent(const QString &path)
     m_labelSort->setText("–");
     setWindowTitle("VLC Frame Grabber");
 
+    static const QStringList imageExts = {"png","jpg","jpeg","bmp","tif","tiff","webp"};
+    const QString ext = QFileInfo(path).suffix().toLower();
+
     if (path.endsWith(".gif", Qt::CaseInsensitive)) {
         gif.setFileName(path);
         if (gif.isValid()) { eTime.invalidate(); gif.start(); }
         else return;
+    } else if (imageExts.contains(ext)) {
+        // Single image → treat as one frame
+        QPixmap px(path);
+        if (px.isNull()) return;
+        m_bigMap[0]   = px;
+        m_delay       = 40;
+        m_fillingMap  = false;
+        m_rangeSlider->setRange(0, 0);
+        m_rangeSlider->setLowerValue(0);
+        m_rangeSlider->setUpperValue(0);
+        m_sortSlider->setRange(1, 1);
+        m_sortSlider->setValue(1);
+        m_labelLower->setText("0");
+        m_labelUpper->setText("0");
+        m_labelSort->setText("1/1");
+        m_rangeSlider->blockSignals(false);
+        m_sortSlider->blockSignals(false);
+        m_actBgRemove->setEnabled(true);
+        m_label->setImage(px, 0, 1, m_delay);
+        m_label->update();
     } else {
         frame = Frame();
         eTime.invalidate();
@@ -418,6 +482,7 @@ void VideoWidget::processFrame(const QImage &img, int index, int count)
             m_rangeSlider->blockSignals(false);
             m_sortSlider->blockSignals(false);
             m_fillingMap = false;
+            m_actBgRemove->setEnabled(true);
         }
     }
 }
@@ -551,3 +616,150 @@ unsigned VideoWidget::formatCallback(void **opaque, char *chroma,
 }
 
 void VideoWidget::formatCleanupCallback(void *) {}
+
+// ─── Background removal ───────────────────────────────────────────────────────
+
+void VideoWidget::startBgRemoval()
+{
+    if (m_bigMap.isEmpty()) return;
+
+    // Only process frames in current slider range with step
+    const int first = m_rangeSlider->lowerValue();
+    const int last  = m_rangeSlider->upperValue();
+    const int step  = m_sortSlider->value();
+    QMap<int, QPixmap> toProcess;
+    for (int i = first; i <= last; i += step)
+        if (m_bigMap.contains(i))
+            toProcess[i] = m_bigMap[i];
+    if (toProcess.isEmpty()) return;
+
+    m_actBgRemove->setEnabled(false);
+    setWindowTitle(QString("Hintergrund wird entfernt … (0/%1)").arg(toProcess.size()));
+
+    m_bgRemover = new ComfyBgRemover("http://127.0.0.1:8188", this);
+    connect(m_bgRemover, &ComfyBgRemover::frameReady, this, &VideoWidget::onBgFrameReady);
+    connect(m_bgRemover, &ComfyBgRemover::progress,   this, &VideoWidget::onBgProgress);
+    connect(m_bgRemover, &ComfyBgRemover::finished,   this, &VideoWidget::onBgFinished);
+    connect(m_bgRemover, &ComfyBgRemover::error, this, [this](const QString &msg) {
+        setWindowTitle("Fehler: " + msg);
+        m_actBgRemove->setEnabled(true);
+        m_bgRemover->deleteLater();
+        m_bgRemover = nullptr;
+    });
+
+    const QAction *checked = m_modelGroup->checkedAction();
+    const QString model = checked ? checked->text() : "BiRefNet-general";
+    m_bgRemover->process(toProcess, model);
+}
+
+void VideoWidget::onBgFrameReady(int index, QPixmap result)
+{
+    m_bigMap[index] = result;
+    // Show current frame live if it's visible
+    if (!m_showingGrid && m_label->currentIndex() == index) {
+        m_label->setImage(result, index, m_bigMap.size(), m_delay);
+        m_label->update();
+    }
+}
+
+void VideoWidget::onBgProgress(int done, int total)
+{
+    setWindowTitle(QString("Hintergrund wird entfernt … (%1/%2)").arg(done).arg(total));
+}
+
+void VideoWidget::onBgFinished()
+{
+    setWindowTitle("VLC Frame Grabber");
+    m_actBgRemove->setEnabled(true);
+    m_bgRemover->deleteLater();
+    m_bgRemover = nullptr;
+    if (m_showingGrid)
+        paintGrid();
+    else {
+        const int cur = m_rangeSlider->lowerValue();
+        if (m_bigMap.contains(cur)) {
+            m_label->setImage(m_bigMap[cur], cur, m_bigMap.size(), m_delay);
+            m_label->update();
+        }
+    }
+}
+
+// ─── Speichern ────────────────────────────────────────────────────────────────
+
+void VideoWidget::saveCurrentFrame()
+{
+    if (m_bigMap.isEmpty()) return;
+    const int idx = m_rangeSlider->lowerValue();
+    if (!m_bigMap.contains(idx)) return;
+
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Frame speichern", QString(), "PNG (*.png);;All files (*)");
+    if (path.isEmpty()) return;
+
+    m_bigMap[idx].save(path, "PNG");
+}
+
+void VideoWidget::applyCrop()
+{
+    if (m_bigMap.isEmpty()) return;
+
+    const QRect cropRect = m_label->cropRectInImageCoords();
+    const int first = m_rangeSlider->lowerValue();
+    const int last  = m_rangeSlider->upperValue();
+    const int step  = m_sortSlider->value();
+
+    QMap<int, QPixmap> newMap;
+    int newIndex = 0;
+    for (int i = first; i <= last; i += step) {
+        if (!m_bigMap.contains(i)) continue;
+        QPixmap px = m_bigMap[i];
+        if (!cropRect.isEmpty() && cropRect != px.rect())
+            px = px.copy(cropRect);
+        newMap[newIndex++] = px;
+    }
+    if (newMap.isEmpty()) return;
+
+    m_bigMap = newMap;
+    m_delay  = qMax(16, m_delay * step);
+
+    const int count = m_bigMap.size();
+    m_rangeSlider->blockSignals(true);
+    m_sortSlider->blockSignals(true);
+    m_rangeSlider->setRange(0, count - 1);
+    m_rangeSlider->setLowerValue(0);
+    m_rangeSlider->setUpperValue(count - 1);
+    const int maxSort = qMax(1, count / 2);
+    m_sortSlider->setRange(1, maxSort);
+    m_sortSlider->setValue(1);
+    m_labelLower->setText("0");
+    m_labelUpper->setText(QString::number(count - 1));
+    m_labelSort->setText(QString("1/%1").arg(maxSort));
+    m_rangeSlider->blockSignals(false);
+    m_sortSlider->blockSignals(false);
+
+    m_label->resetSelAdjList();
+    m_label->setImage(m_bigMap[0], 0, count, m_delay);
+    m_label->update();
+
+    if (m_showingGrid) paintGrid();
+}
+
+void VideoWidget::saveSpriteSheet()
+{
+    if (m_bigMap.isEmpty()) return;
+
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Sprite-Sheet speichern",
+        QString("%1x%2_%3frames.png")
+            .arg(m_resolution).arg(m_resolution)
+            .arg(m_rangeSlider->upperValue() - m_rangeSlider->lowerValue() + 1),
+        "PNG (*.png);;All files (*)");
+    if (path.isEmpty()) return;
+
+    const QPixmap grid = composeGrid(
+        m_rangeSlider->lowerValue(),
+        m_rangeSlider->upperValue() - m_rangeSlider->lowerValue() + 1,
+        m_sortSlider->value());
+
+    grid.save(path, "PNG");
+}

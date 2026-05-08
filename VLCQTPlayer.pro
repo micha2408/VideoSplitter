@@ -1,4 +1,4 @@
-QT       += widgets
+QT       += widgets network
 
 CONFIG   += c++17
 TEMPLATE = app
@@ -8,12 +8,14 @@ SOURCES += \
     Label.cpp \
     RangeSlider.cpp \
     main.cpp \
-    VideoWidget.cpp
+    VideoWidget.cpp \
+    ComfyBgRemover.cpp
 
 HEADERS += \
     Label.h \
     RangeSlider.h \
-    VideoWidget.h
+    VideoWidget.h \
+    ComfyBgRemover.h
 
 # ----- libVLC Einbindung -----
 

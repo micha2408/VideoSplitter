@@ -4,7 +4,7 @@ project(VlcFrameGrabber LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 qt_standard_project_setup()
 
@@ -23,6 +23,8 @@ qt_add_executable(${PROJECT_NAME}
     RangeSlider.h
     Label.cpp
     Label.h
+    ComfyBgRemover.cpp
+    ComfyBgRemover.h
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -34,6 +36,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Network
     "${VLC_SDK_PATH}/lib/libvlc.lib"
 )
 

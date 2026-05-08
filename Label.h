@@ -16,8 +16,16 @@ public:
     const QPoint getAdjustion(){ return saList.last().adjustion; }
     // void setSelection(const QRect r){ saList.last().selection=r; }
     void setAdjustion(const QPoint a){ saList.last().adjustion=a; }
-    void resetSelection(){ if(saList.size()) saList.removeLast();}
+    void resetSelection(){ if(saList.size()) saList.removeLast(); m_imageCropRect={}; update(); }
     void setImage(const QPixmap &p, int i, int c, int d) { imagePlus=ImagePlus(p,i,c,d); emit sendPic(this); }
+    int currentIndex() const { return imagePlus.index; }
+
+    // Crop in full-resolution image coordinates (set in mouseReleaseEvent)
+    QRect cropRectInImageCoords() const {
+        if (imagePlus.image.isNull()) return {};
+        if (m_imageCropRect.isEmpty()) return imagePlus.image.rect();
+        return m_imageCropRect;
+    }
     double cropAspectRatio() const {
         if (saList.size() >= 2) {
             const QRectF &sel = saList.last().selection;
@@ -30,6 +38,7 @@ public:
     void resetSelAdjList()
     {
         saList.clear();
+        m_imageCropRect = {};
     }
     const QPixmap &scale(int &x, int &y);
 protected:
@@ -70,6 +79,7 @@ private:
         QPoint adjustion;
     };
     QList<SelAdj> saList;
+    QRect m_imageCropRect;  // crop in full image pixel coords, set on mouse release
 signals:
     void sendPic(Label *l);
     void sendSize(int sizePic);

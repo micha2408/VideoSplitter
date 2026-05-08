@@ -11,12 +11,14 @@
 #include <QLabel>
 #include <QSlider>
 #include <QElapsedTimer>
+#include <QActionGroup>
 
 #include <vlc/vlc.h>
 
 class Label;
 class RangeSlider;
 class QStackedWidget;
+class ComfyBgRemover;
 
 class VideoWidget : public QMainWindow
 {
@@ -84,6 +86,11 @@ private:
     int  m_resolution  = 1024;
     bool m_showingGrid = false;
 
+    // Background removal
+    ComfyBgRemover *m_bgRemover    = nullptr;
+    QAction        *m_actBgRemove  = nullptr;
+    QActionGroup   *m_modelGroup   = nullptr;
+
     // Grid layout helper
     struct GridDims { int cols, rows; };
     GridDims findOptimalGrid(int N, double cropAspect) const;
@@ -112,6 +119,13 @@ private slots:
     void upperValueChanged(int value);
     void sortValueChanged(int value);
     void previewTick();
+    void startBgRemoval();
+    void onBgFrameReady(int index, QPixmap result);
+    void onBgProgress(int done, int total);
+    void onBgFinished();
+    void saveCurrentFrame();
+    void saveSpriteSheet();
+    void applyCrop();
 };
 
 #endif // MAINWINDOW_H

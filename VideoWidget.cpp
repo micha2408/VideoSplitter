@@ -258,19 +258,23 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
     m_previewList.clear();
+    const QRect cropRect = m_label->cropRectInImageCoords();
 
     for (int i = 0; i < N; ++i) {
         const int key = first + i * step;
         if (!m_bigMap.contains(key)) continue;
 
-        const QPixmap &src = m_bigMap[key];
-        m_previewList << src;   // original frame for preview animation
+        // Apply crop if one is set
+        QPixmap src = m_bigMap[key];
+        if (!cropRect.isEmpty() && cropRect != src.rect())
+            src = src.copy(cropRect);
+
+        m_previewList << src;
 
         const int row = i / cols;
         const int col = i % cols;
         const QRect cell(col * cellW, row * cellH, cellW, cellH);
 
-        // Fill cell exactly — no black bars, slight stretch compensated by prim in SL
         p.drawPixmap(cell, src.scaled(cell.size(),
                                       Qt::IgnoreAspectRatio,
                                       Qt::SmoothTransformation));

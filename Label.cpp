@@ -33,6 +33,11 @@ void Label::mouseMoveEvent(QMouseEvent *ev)
 
 void Label::mouseReleaseEvent(QMouseEvent *ev)
 {
+    if (ev->button() == Qt::RightButton)
+    {
+        emit rightClicked();
+        return;
+    }
     if (ev->modifiers() & Qt::ControlModifier)
     {
         // STRG ist gedrückt
@@ -124,7 +129,6 @@ void Label::paintEvent(QPaintEvent *e)
     int y=0;
     const QPixmap &scaled=scale(x,y);
     p.fillRect(rect(),QColor(Qt::blue));
-    emit sendPic(this);
     p.drawPixmap(x, y, scaled);
     p.setPen(QPen(Qt::red, 2));
     p.drawRect(x, y, scaled.width(), scaled.height());

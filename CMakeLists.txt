@@ -17,9 +17,6 @@ endif()
 
 qt_add_executable(${PROJECT_NAME}
     main.cpp
-    splitview.cpp
-    splitview.h
-    splitview.ui
     VideoWidget.cpp
     VideoWidget.h
     RangeSlider.cpp

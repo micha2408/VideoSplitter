@@ -5,7 +5,7 @@
 #include "math.h"
 #include <QPainter>
 #include <QPixmap>
-#include <Label.h>
+#include "Label.h"
 #include <QTimer>
 #include <QDateTime>
 #include <QRegularExpression>

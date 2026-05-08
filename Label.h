@@ -4,7 +4,6 @@
 #include <QRect>
 #include <QObject>
 #include <QLabel>
-#include "splitview.h"
 #include <QRubberBand>
 
 class Label : public QLabel
@@ -18,7 +17,16 @@ public:
     // void setSelection(const QRect r){ saList.last().selection=r; }
     void setAdjustion(const QPoint a){ saList.last().adjustion=a; }
     void resetSelection(){ if(saList.size()) saList.removeLast();}
-    void setImage(const QPixmap &p, int i, int c, int d) { imagePlus=ImagePlus(p,i,c,d); }
+    void setImage(const QPixmap &p, int i, int c, int d) { imagePlus=ImagePlus(p,i,c,d); emit sendPic(this); }
+    double cropAspectRatio() const {
+        if (saList.size() >= 2) {
+            const QRectF &sel = saList.last().selection;
+            if (sel.height() > 0) return sel.width() / sel.height();
+        }
+        if (!imagePlus.image.isNull() && imagePlus.image.height() > 0)
+            return static_cast<double>(imagePlus.image.width()) / imagePlus.image.height();
+        return 1.0;
+    }
     void resetSelAdjList()
     {
         saList.clear();
@@ -30,7 +38,6 @@ protected:
     void mouseReleaseEvent(QMouseEvent *ev) override;
     void paintEvent(QPaintEvent *ev) override;
     void resizeEvent(QResizeEvent *ev) override;
-    friend SplitView;    
 private:
     QRectF normalizeRect(const QRectF &small, const QRectF &big);
     QRectF scaleRect(const QRectF &norm, const QRectF &big);
@@ -66,6 +73,7 @@ private:
 signals:
     void sendPic(Label *l);
     void sendSize(int sizePic);
+    void rightClicked();
 };
 
 

@@ -5,18 +5,19 @@
 #include <QMutex>
 #include <QImage>
 #include <QMovie>
+#include <QMap>
+#include <QTimer>
+#include <QList>
+#include <QLabel>
+#include <QSlider>
+#include <QElapsedTimer>
 
 #include <vlc/vlc.h>
-#include <QRubberBand>
-
-#include <QLabel>
-#include <QList>
-
-#include <QElapsedTimer>
-#include <QSettings>
 
 class Label;
-class SplitView;
+class RangeSlider;
+class QStackedWidget;
+
 class VideoWidget : public QMainWindow
 {
     Q_OBJECT
@@ -28,65 +29,89 @@ public:
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
-
-
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private:
-
     void doDropEvent(const QString &path);
-    QPixmap currentpixMap;
-    QElapsedTimer eTime;
+
     // libVLC
-    libvlc_instance_t *m_vlcInstance = nullptr;
-    libvlc_media_player_t *m_mediaPlayer = nullptr;
-    libvlc_media_t *m_media = nullptr;
-    // Framebuffer
+    libvlc_instance_t     *m_vlcInstance  = nullptr;
+    libvlc_media_player_t *m_mediaPlayer  = nullptr;
+    libvlc_media_t        *m_media        = nullptr;
+
+    // VLC decode buffer
     QMutex m_frameMutex;
-    int m_videoWidth = 1280; // Default (wird in Format-Callback gesetzt)
+    int m_videoWidth  = 1280;
     int m_videoHeight = 720;
-    int m_pitch = 0;         // Bytes pro Zeile
-    struct Frame
-    {
-        Frame()
-            : current(-1)
-            , count(-1)
-            , image(640,480,QImage::Format_ARGB32)
-        {
-            image.fill(Qt::black);
-        }
-        void newImage(int w, int h)
-        {
-            image=QImage(w,h,QImage::Format_ARGB32);
-        }
+    int m_pitch       = 0;
+    struct Frame {
+        Frame() : current(0), count(-1), image(640, 480, QImage::Format_ARGB32)
+        { image.fill(Qt::black); }
+        void newImage(int w, int h) { image = QImage(w, h, QImage::Format_ARGB32); }
         int current;
         int count;
-        QImage image;          // letzter Frame als QImage
+        QImage image;
     } frame;
-    int m_currentFrame;
+
+    // Captured frames
+    QMap<int, QPixmap> m_bigMap;
+    int  m_delay      = 0;
+    bool m_fillingMap = false;
+
+    // GIF
     QMovie gif;
-    Label *m_label;         // Anzeige des letzten Frames
-    SplitView *splitView;
-    // interne Hilfsfunktionen
+    QElapsedTimer eTime;
+
+    // UI
+    QStackedWidget *m_stack;
+    Label          *m_label;         // stack page 0: live video/GIF
+    QLabel         *m_gridLabel;     // sprite sheet (inside grid page)
+    QLabel         *m_previewLabel;  // animated preview (inside grid page)
+    QLabel         *m_labelLower;
+    QLabel         *m_labelUpper;
+    QLabel         *m_labelSort;
+    RangeSlider    *m_rangeSlider;
+    QSlider        *m_sortSlider;
+
+    // Preview animation
+    QList<QPixmap> m_previewList;
+    QTimer         m_previewTimer;
+    int            m_previewIndex = 0;
+    int            m_gridCols     = 1;
+    int            m_gridRows     = 1;
+
+    // State
+    int  m_resolution  = 1024;
+    bool m_showingGrid = false;
+
+    // Grid layout helper
+    struct GridDims { int cols, rows; };
+    GridDims findOptimalGrid(int N, double cropAspect) const;
+    double   getCropAspect() const;
+
+    // Helpers
     void initVlc();
     void releaseVlc();
     bool playFile(const QString &path);
     void processFrame(const QImage &img, int index, int count);
+    QPixmap composeGrid(int first, int count, int step);
+    void paintGrid();
 
-    // statische Callback-Funktionen für libVLC
-    static void *lockCallback(void *opaque, void **planes);
-    static void unlockCallback(void *opaque, void *picture, void *const *planes);
-    static void displayCallback(void *opaque, void *picture);
+    // VLC callbacks
+    static void    *lockCallback(void *opaque, void **planes);
+    static void     unlockCallback(void *opaque, void *picture, void *const *planes);
+    static void     displayCallback(void *opaque, void *picture);
     static unsigned formatCallback(void **opaque, char *chroma,
                                    unsigned *width, unsigned *height,
                                    unsigned *pitches, unsigned *lines);
-    static void formatCleanupCallback(void *opaque);
-//    static void eventCallback(const libvlc_event_t* event, void* data);
+    static void     formatCleanupCallback(void *opaque);
 
-public slots:
-    void menu_split_1024(bool);
-    void menu_split_2048(bool);
-    void menu_uncrop_pic(bool);
-    void menu_pause_video(bool checked);
+private slots:
+    void toggleView();
+    void lowerValueChanged(int value);
+    void upperValueChanged(int value);
+    void sortValueChanged(int value);
+    void previewTick();
 };
 
 #endif // MAINWINDOW_H

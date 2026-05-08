@@ -8,14 +8,12 @@ SOURCES += \
     Label.cpp \
     RangeSlider.cpp \
     main.cpp \
-    VideoWidget.cpp \
-    splitview.cpp
+    VideoWidget.cpp
 
 HEADERS += \
     Label.h \
     RangeSlider.h \
-    VideoWidget.h \
-    splitview.h
+    VideoWidget.h
 
 # ----- libVLC Einbindung -----
 
@@ -41,5 +39,3 @@ QMAKE_POST_LINK += copy /Y \"$$VLC_DLL\" \"$$OUT_PWD\"
 
 message($$QMAKE_POST_LINK)
 
-FORMS += \
-    splitview.ui

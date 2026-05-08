@@ -4,7 +4,7 @@
 #include <QRect>
 #include <QObject>
 #include <QLabel>
-#include <splitview.h>
+#include "splitview.h"
 #include <QRubberBand>
 
 class Label : public QLabel

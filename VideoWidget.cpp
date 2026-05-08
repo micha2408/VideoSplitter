@@ -15,7 +15,7 @@
 #include <QRubberBand>
 #include <QPainter>
 #include "splitview.h"
-#include <Label.h>
+#include "Label.h"
 
 #include <QTimer>
 
@@ -265,6 +265,7 @@ bool VideoWidget::playFile(const QString &path)
     }
     libvlc_media_player_set_media(m_mediaPlayer, m_media);
     libvlc_media_player_play(m_mediaPlayer);
+    return true;
 }
 
 // ---- libVLC Callback-Implementierung ----

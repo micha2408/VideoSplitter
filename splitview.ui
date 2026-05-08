@@ -170,7 +170,7 @@
   <customwidget>
    <class>RangeSlider</class>
    <extends>QSlider</extends>
-   <header>rangeslider.h</header>
+   <header>RangeSlider.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

@@ -21,6 +21,7 @@ void VideoExporter::exportFrames(const QMap<int, QPixmap> &frames, const Options
     const QString inputPattern = m_tempDir.path() + "/frame_%04d.png";
     const QStringList args     = buildArgs(opts, inputPattern);
 
+    m_stderrBuf.clear();
     m_process = new QProcess(this);
     connect(m_process, &QProcess::readyReadStandardError, this, &VideoExporter::onProcessOutput);
     connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
@@ -69,9 +70,11 @@ QStringList VideoExporter::buildArgs(const Options &opts, const QString &inputPa
     switch (opts.format)
     {
     case MP4:
-        args << "-c:v" << "libx264"
-             << "-pix_fmt" << "yuv420p"   // broad compatibility
-             << "-crf" << "18"            // high quality (0=lossless, 51=worst)
+        // scale ensures even dimensions — H.264/yuv420p requires width+height divisible by 2
+        args << "-vf"    << "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+             << "-c:v"   << "libx264"
+             << "-pix_fmt" << "yuv420p"
+             << "-crf"   << "18"
              << "-movflags" << "+faststart";
         break;
 
@@ -106,12 +109,14 @@ QStringList VideoExporter::buildArgs(const Options &opts, const QString &inputPa
 
 void VideoExporter::onProcessOutput()
 {
-    // ffmpeg writes progress to stderr — parse "frame=N" for progress
     const QString out = m_process->readAllStandardError();
+    m_stderrBuf += out;
+
+    // Parse "frame=N" for progress
     const int pos = out.lastIndexOf("frame=");
     if (pos >= 0)
     {
-        const int eol = out.indexOf(' ', pos + 6);
+        const int eol   = out.indexOf(' ', pos + 6);
         const int frame = out.mid(pos + 6, eol - pos - 6).trimmed().toInt();
         if (frame > 0)
             emit progress(frame, m_frameCount);
@@ -120,10 +125,23 @@ void VideoExporter::onProcessOutput()
 
 void VideoExporter::onProcessFinished(int exitCode)
 {
+    // Flush remaining stderr
+    if (m_process)
+        m_stderrBuf += m_process->readAllStandardError();
+
     m_process->deleteLater();
     m_process = nullptr;
+
     if (exitCode == 0)
+    {
         emit finished(m_opts.outputPath);
+    }
     else
-        emit error(QString("ffmpeg beendet mit Code %1").arg(exitCode));
+    {
+        // Show last 800 chars of stderr so user sees the actual ffmpeg error
+        const QString detail = m_stderrBuf.length() > 800
+            ? "…" + m_stderrBuf.right(800)
+            : m_stderrBuf;
+        emit error(QString("ffmpeg Code %1:\n\n%2").arg(exitCode).arg(detail));
+    }
 }

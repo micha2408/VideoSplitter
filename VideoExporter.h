@@ -43,4 +43,5 @@ private:
     QProcess      *m_process = nullptr;
     Options        m_opts;
     int            m_frameCount = 0;
+    QString        m_stderrBuf;
 };

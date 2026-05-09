@@ -8,6 +8,7 @@
 #include <QMap>
 #include <QTimer>
 #include <QList>
+#include <QStack>
 #include <QLabel>
 #include <QSlider>
 #include <QElapsedTimer>
@@ -33,6 +34,7 @@ protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     void doDropEvent(const QString &path);
@@ -62,6 +64,18 @@ private:
     int  m_delay      = 0;
     bool m_fillingMap = false;
 
+    // Undo stack (applyCrop + BiRefNet schieben je einen Zustand drauf)
+    struct UndoState
+    {
+        QMap<int, QPixmap> bigMap;
+        int delay = 0;
+        int lower = 0;
+        int upper = 0;
+        int step  = 1;
+    };
+    QStack<UndoState> m_undoStack;
+    QAction          *m_actUndo = nullptr;
+
     // GIF
     QMovie gif;
     QElapsedTimer eTime;
@@ -77,12 +91,19 @@ private:
     RangeSlider    *m_rangeSlider;
     QSlider        *m_sortSlider;
 
-    // Preview animation
+    // Preview animation (grid view)
     QList<QPixmap> m_previewList;
     QTimer         m_previewTimer;
     int            m_previewIndex = 0;
     int            m_gridCols     = 1;
     int            m_gridRows     = 1;
+
+    // Playback (video view, cycles through m_bigMap selection)
+    QTimer m_playTimer;
+    int    m_playIndex   = 0;
+    bool   m_paused      = false;
+    enum   ActiveHandle  { NoHandle, LowerHandle, UpperHandle };
+    ActiveHandle m_lastHandle = NoHandle;
 
     // State
     int  m_resolution  = 1024;
@@ -105,6 +126,10 @@ private:
     void processFrame(const QImage &img, int index, int count);
     QPixmap composeGrid(int first, int count, int step);
     void paintGrid();
+    void startPlayback();
+    void updateTitle();
+    void pushUndo();
+    void showFrame(int index);
 
     // VLC callbacks
     static void    *lockCallback(void *opaque, void **planes);
@@ -121,6 +146,8 @@ private slots:
     void upperValueChanged(int value);
     void sortValueChanged(int value);
     void previewTick();
+    void playTick();
+    void togglePause();
     void startBgRemoval();
     void onBgFrameReady(int index, QPixmap result);
     void onBgProgress(int done, int total);
@@ -128,6 +155,7 @@ private slots:
     void saveCurrentFrame();
     void saveSpriteSheet();
     void applyCrop();
+    void undoCrop();
     void exportVideo();
 };
 

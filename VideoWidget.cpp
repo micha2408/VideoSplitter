@@ -17,6 +17,7 @@
 #include <QPainter>
 #include <QSettings>
 #include <QFileInfo>
+#include <QKeyEvent>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <windows.h>
@@ -61,9 +62,14 @@ VideoWidget::VideoWidget(QWidget *parent)
 
     QMenu *menuEdit = new QMenu("Bearbeiten", bar);
     bar->addMenu(menuEdit);
-    QAction *actApplyCrop = menuEdit->addAction(
-        "Zuschnitt anwenden  (Pixel-Crop + Zeitbereich + Step)");
+    QAction *actApplyCrop = menuEdit->addAction("Zuschnitt anwenden  (Pixel-Crop + Zeitbereich + Step)");
     connect(actApplyCrop, &QAction::triggered, this, &VideoWidget::applyCrop);
+    m_actUndo = menuEdit->addAction("Rückgängig  (letzter Zuschnitt)");
+    m_actUndo->setEnabled(false);
+    connect(m_actUndo, &QAction::triggered, this, &VideoWidget::undoCrop);
+    menuEdit->addSeparator();
+    QAction *actPause = menuEdit->addAction("Pause / Weiter  [Space]");
+    connect(actPause, &QAction::triggered, this, &VideoWidget::togglePause);
 
     QMenu *menuFx = new QMenu("Effekte", bar);
     bar->addMenu(menuFx);
@@ -89,7 +95,21 @@ VideoWidget::VideoWidget(QWidget *parent)
     menuFx->addSeparator();
     m_actBgRemove = menuFx->addAction("Hintergrund entfernen (ComfyUI)");
     m_actBgRemove->setEnabled(false);
-    connect(m_actBgRemove, &QAction::triggered, this, &VideoWidget::startBgRemoval);
+    connect(m_actBgRemove, &QAction::triggered, this, [this]
+    {
+        if (m_bgRemover)
+        {
+            m_bgRemover->cancel();
+            m_bgRemover->deleteLater();
+            m_bgRemover = nullptr;
+            m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
+            setWindowTitle("VLC Frame Grabber");
+        }
+        else
+        {
+            startBgRemoval();
+        }
+    });
 
     // ── Layout ──
     resize(1000, 680);
@@ -157,6 +177,7 @@ VideoWidget::VideoWidget(QWidget *parent)
     // Connections
     connect(m_label, &Label::rightClicked, this, &VideoWidget::toggleView);
     connect(&m_previewTimer, &QTimer::timeout, this, &VideoWidget::previewTick);
+    connect(&m_playTimer,    &QTimer::timeout, this, &VideoWidget::playTick);
     connect(&gif, &QMovie::frameChanged, this, [this](int)
     {
         processFrame(gif.currentImage(), gif.currentFrameNumber(), gif.frameCount());
@@ -189,11 +210,14 @@ void VideoWidget::toggleView()
     m_stack->setCurrentIndex(m_showingGrid ? 1 : 0);
     if (m_showingGrid)
     {
+        m_playTimer.stop();
         paintGrid();
-    } else
+    }
+    else
     {
         m_previewTimer.stop();
-        setWindowTitle("VLC Frame Grabber");
+        if (!m_fillingMap) startPlayback();
+        // updateTitle() wird von startPlayback() aufgerufen
     }
 }
 
@@ -251,6 +275,63 @@ VideoWidget::GridDims VideoWidget::findOptimalGrid(int N, double cropAspect) con
 double VideoWidget::getCropAspect() const
 {
     return m_label->cropAspectRatio();
+}
+
+// ─── Playback through m_bigMap selection ─────────────────────────────────────
+
+void VideoWidget::togglePause()
+{
+    if (m_fillingMap || m_bigMap.isEmpty()) return;
+    m_paused = !m_paused;
+    if (m_paused)
+    {
+        m_playTimer.stop();
+    }
+    else
+    {
+        // Play startet immer vom unteren Griff
+        m_playIndex = m_rangeSlider->lowerValue();
+        m_playTimer.start(qMax(16, m_delay * m_sortSlider->value()));
+    }
+    updateTitle();
+}
+
+void VideoWidget::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Space)
+        togglePause();
+    else
+        QMainWindow::keyPressEvent(event);
+}
+
+void VideoWidget::startPlayback()
+{
+    m_playIndex = m_rangeSlider->lowerValue();
+    if (!m_paused)
+        m_playTimer.start(qMax(16, m_delay * m_sortSlider->value()));
+    updateTitle();
+}
+
+void VideoWidget::playTick()
+{
+    const int first = m_rangeSlider->lowerValue();
+    const int last  = m_rangeSlider->upperValue();
+    const int step  = m_sortSlider->value();
+
+    if (!m_bigMap.contains(m_playIndex))
+        m_playIndex = first;
+
+    const QRect cropRect = m_label->cropRectInImageCoords();
+    QPixmap px = m_bigMap[m_playIndex];
+    if (!cropRect.isEmpty() && cropRect != px.rect())
+        px = px.copy(cropRect);
+
+    m_label->setImage(px, m_playIndex, m_bigMap.size(), m_delay);
+    m_label->update();
+
+    m_playIndex += step;
+    if (m_playIndex > last)
+        m_playIndex = first;
 }
 
 // ─── Grid composing ─────────────────────────────────────────────────────────
@@ -332,6 +413,16 @@ void VideoWidget::paintGrid()
 
 // ─── Slider slots ───────────────────────────────────────────────────────────
 
+void VideoWidget::showFrame(int index)
+{
+    if (!m_bigMap.contains(index)) return;
+    QPixmap px = m_bigMap[index];
+    const QRect cr = m_label->cropRectInImageCoords();
+    if (!cr.isEmpty() && cr != px.rect()) px = px.copy(cr);
+    m_label->setImage(px, index, m_bigMap.size(), m_delay);
+    m_label->update();
+}
+
 void VideoWidget::lowerValueChanged(int value)
 {
     m_labelLower->setText(QString::number(value));
@@ -340,13 +431,20 @@ void VideoWidget::lowerValueChanged(int value)
         m_rangeSlider->setLowerValue(m_rangeSlider->upperValue() - 1);
         return;
     }
+    m_lastHandle = LowerHandle;
     if (m_showingGrid)
-        paintGrid();
-    else if (m_bigMap.contains(value))
     {
-        m_label->setImage(m_bigMap[value], value, m_bigMap.size(), m_delay);
-        m_label->update();
+        paintGrid();
     }
+    else if (!m_fillingMap)
+    {
+        // Slider bewegt → automatisch pausieren und Frame zeigen
+        m_paused = true;
+        m_playTimer.stop();
+        m_playIndex = value;
+        showFrame(value);
+    }
+    updateTitle();
 }
 
 void VideoWidget::upperValueChanged(int value)
@@ -357,13 +455,20 @@ void VideoWidget::upperValueChanged(int value)
         m_rangeSlider->setUpperValue(m_rangeSlider->lowerValue() + 1);
         return;
     }
+    m_lastHandle = UpperHandle;
     if (m_showingGrid)
-        paintGrid();
-    else if (m_bigMap.contains(value))
     {
-        m_label->setImage(m_bigMap[value], value, m_bigMap.size(), m_delay);
-        m_label->update();
+        paintGrid();
     }
+    else if (!m_fillingMap)
+    {
+        // Slider bewegt → automatisch pausieren und Frame zeigen
+        m_paused = true;
+        m_playTimer.stop();
+        m_playIndex = value;
+        showFrame(value);
+    }
+    updateTitle();
 }
 
 void VideoWidget::sortValueChanged(int value)
@@ -373,6 +478,9 @@ void VideoWidget::sortValueChanged(int value)
     m_labelSort->setText(QString("%1/%2").arg(value).arg(maxSort));
     if (m_showingGrid)
         paintGrid();
+    else if (!m_fillingMap && !m_paused)
+        m_playTimer.start(qMax(16, m_delay * value));
+    updateTitle();
 }
 
 // ─── Preview animation ───────────────────────────────────────────────────────
@@ -415,6 +523,7 @@ void VideoWidget::doDropEvent(const QString &path)
 
     gif.stop();
     m_previewTimer.stop();
+    m_playTimer.stop();
 #if (LIBVLC_VERSION_MAJOR == 4)
     libvlc_media_player_stop_async(m_mediaPlayer);
 #else
@@ -424,16 +533,22 @@ void VideoWidget::doDropEvent(const QString &path)
     m_label->resetSelAdjList();
     m_bigMap.clear();
     m_previewList.clear();
-    m_delay       = 0;
-    m_fillingMap  = true;
+    m_undoStack.clear();
+    m_actUndo->setEnabled(false);
+    m_delay      = 0;
+    m_fillingMap = true;
+    m_paused     = false;
+    m_lastHandle = NoHandle;
     m_showingGrid = false;
     m_stack->setCurrentIndex(0);
+    m_rangeSlider->setEnabled(false);
+    m_sortSlider->setEnabled(false);
     m_rangeSlider->blockSignals(true);
     m_sortSlider->blockSignals(true);
     m_labelLower->setText("–");
     m_labelUpper->setText("–");
     m_labelSort->setText("–");
-    setWindowTitle("VLC Frame Grabber");
+    setWindowTitle("VLC Frame Grabber — sammle Frames …");
 
     static const QStringList imageExts = {"png","jpg","jpeg","bmp","tif","tiff","webp"};
     const QString ext = QFileInfo(path).suffix().toLower();
@@ -476,6 +591,31 @@ void VideoWidget::doDropEvent(const QString &path)
 
 // ─── Frame processing ────────────────────────────────────────────────────────
 
+void VideoWidget::pushUndo()
+{
+    UndoState s;
+    s.bigMap = m_bigMap;
+    s.delay  = m_delay;
+    s.lower  = m_rangeSlider->lowerValue();
+    s.upper  = m_rangeSlider->upperValue();
+    s.step   = m_sortSlider->value();
+    m_undoStack.push(s);
+    m_actUndo->setEnabled(true);
+}
+
+void VideoWidget::updateTitle()
+{
+    if (m_fillingMap || m_bigMap.isEmpty()) return;
+    const int first = m_rangeSlider->lowerValue();
+    const int last  = m_rangeSlider->upperValue();
+    const int step  = m_sortSlider->value();
+    const double fps = step > 0 && m_delay > 0 ? 1000.0 / (m_delay * step) : 0.0;
+    const QString status = m_paused ? "  ⏸ PAUSE" : "";
+    setWindowTitle(QString("VLC Frame Grabber  —  [%1 … %2]  step %3  |  %4 fps%5")
+                   .arg(first).arg(last).arg(step)
+                   .arg(fps, 0, 'f', 1).arg(status));
+}
+
 void VideoWidget::processFrame(const QImage &img, int index, int count)
 {
     if (!eTime.isValid()) { eTime.start(); return; }
@@ -484,8 +624,13 @@ void VideoWidget::processFrame(const QImage &img, int index, int count)
     eTime.restart();
 
     const QPixmap px = QPixmap::fromImage(img);
-    m_label->setImage(px, index, count, elapsed);
-    m_label->update();
+
+    // Während m_playTimer läuft nur sammeln, nicht anzeigen
+    if (!m_playTimer.isActive())
+    {
+        m_label->setImage(px, index, count, elapsed);
+        m_label->update();
+    }
 
     if (m_fillingMap && count > 0)
     {
@@ -510,8 +655,16 @@ void VideoWidget::processFrame(const QImage &img, int index, int count)
 
             m_rangeSlider->blockSignals(false);
             m_sortSlider->blockSignals(false);
+            m_rangeSlider->setEnabled(true);
+            m_sortSlider->setEnabled(true);
             m_fillingMap = false;
             m_actBgRemove->setEnabled(true);
+
+            // VLC pausieren — Playback läuft jetzt aus m_bigMap
+            if (m_mediaPlayer)
+                libvlc_media_player_set_pause(m_mediaPlayer, 1);
+            gif.setPaused(true);
+            startPlayback();
         }
     }
 }
@@ -656,6 +809,9 @@ void VideoWidget::startBgRemoval()
 {
     if (m_bigMap.isEmpty()) return;
 
+    // Undo-State sichern — so kann man zurück und ein anderes Modell probieren
+    pushUndo();
+
     // Only process frames in current slider range with step
     const int first = m_rangeSlider->lowerValue();
     const int last  = m_rangeSlider->upperValue();
@@ -666,7 +822,7 @@ void VideoWidget::startBgRemoval()
             toProcess[i] = m_bigMap[i];
     if (toProcess.isEmpty()) return;
 
-    m_actBgRemove->setEnabled(false);
+    m_actBgRemove->setText("Abbrechen");
     setWindowTitle(QString("Hintergrund wird entfernt … (0/%1)").arg(toProcess.size()));
 
     m_bgRemover = new ComfyBgRemover("http://127.0.0.1:8188", this);
@@ -676,7 +832,7 @@ void VideoWidget::startBgRemoval()
     connect(m_bgRemover, &ComfyBgRemover::error, this, [this](const QString &msg)
     {
         setWindowTitle("Fehler: " + msg);
-        m_actBgRemove->setEnabled(true);
+        m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
         m_bgRemover->deleteLater();
         m_bgRemover = nullptr;
     });
@@ -705,7 +861,7 @@ void VideoWidget::onBgProgress(int done, int total)
 void VideoWidget::onBgFinished()
 {
     setWindowTitle("VLC Frame Grabber");
-    m_actBgRemove->setEnabled(true);
+    m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
     m_bgRemover->deleteLater();
     m_bgRemover = nullptr;
     if (m_showingGrid)
@@ -739,6 +895,8 @@ void VideoWidget::saveCurrentFrame()
 void VideoWidget::applyCrop()
 {
     if (m_bigMap.isEmpty()) return;
+
+    pushUndo();
 
     const QRect cropRect = m_label->cropRectInImageCoords();
     const int first = m_rangeSlider->lowerValue();
@@ -788,10 +946,9 @@ void VideoWidget::exportVideo()
 
     // Format-Auswahl über Datei-Filter
     const QString filter =
-        "MP4 Video (*.mp4);;"
-        "WebM mit Alpha (*.webm);;"
-        "Animiertes GIF (*.gif);;"
-        "PNG-Sequenz (*.png)";
+        "MP4 Video H.264 — kein Alpha (*.mp4);;"
+        "Animiertes GIF — binäres Alpha (*.gif);;"
+        "PNG-Sequenz — volles Alpha, für Weiterverarbeitung (*.png)";
 
     const QString path = QFileDialog::getSaveFileName(
         this, "Video exportieren", QString(), filter);
@@ -801,10 +958,9 @@ void VideoWidget::exportVideo()
     opts.fps        = m_delay > 0 ? 1000.0 / m_delay : 25.0;
     opts.outputPath = path;
 
-    if (path.endsWith(".mp4",  Qt::CaseInsensitive)) opts.format = VideoExporter::MP4;
-    else if (path.endsWith(".webm", Qt::CaseInsensitive)) opts.format = VideoExporter::WebM;
-    else if (path.endsWith(".gif",  Qt::CaseInsensitive)) opts.format = VideoExporter::GIF;
-    else                                                   opts.format = VideoExporter::PNG_Sequence;
+    if (path.endsWith(".mp4", Qt::CaseInsensitive))      opts.format = VideoExporter::MP4;
+    else if (path.endsWith(".gif", Qt::CaseInsensitive)) opts.format = VideoExporter::GIF;
+    else                                                  opts.format = VideoExporter::PNG_Sequence;
 
     // Collect frames in slider range with step + crop applied
     const int first = m_rangeSlider->lowerValue();
@@ -843,6 +999,38 @@ void VideoWidget::exportVideo()
     });
 
     exporter->exportFrames(toExport, opts);
+}
+
+void VideoWidget::undoCrop()
+{
+    if (m_undoStack.isEmpty()) return;
+
+    const UndoState s = m_undoStack.pop();
+    m_bigMap = s.bigMap;
+    m_delay  = s.delay;
+    m_actUndo->setEnabled(!m_undoStack.isEmpty());
+
+    m_rangeSlider->blockSignals(true);
+    m_sortSlider->blockSignals(true);
+    m_rangeSlider->setRange(0, m_bigMap.size() - 1);
+    m_rangeSlider->setLowerValue(s.lower);
+    m_rangeSlider->setUpperValue(s.upper);
+    m_sortSlider->setRange(1, qMax(1, m_bigMap.size() / 2));
+    m_sortSlider->setValue(s.step);
+    m_labelLower->setText(QString::number(s.lower));
+    m_labelUpper->setText(QString::number(s.upper));
+    m_labelSort->setText(QString("%1/%2").arg(s.step)
+                         .arg(qMax(1, m_bigMap.size() / 2)));
+    m_rangeSlider->blockSignals(false);
+    m_sortSlider->blockSignals(false);
+
+    if (!m_bigMap.isEmpty())
+    {
+        m_label->setImage(m_bigMap[s.lower], s.lower, m_bigMap.size(), m_delay);
+        m_label->update();
+    }
+    if (m_showingGrid) paintGrid();
+    else startPlayback();
 }
 
 void VideoWidget::saveSpriteSheet()

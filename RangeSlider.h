@@ -29,8 +29,8 @@ private:
     enum HandleType { NoHandle, LowerHandle, UpperHandle };
     HandleType m_activeHandle = NoHandle;
 
-    int m_lower = 25;
-    int m_upper = 75;
+    int m_lower = 0;
+    int m_upper = 100;
 
     int pick(const QPoint& pt) const;
     int pixelPosToRangeValue(int pos) const;

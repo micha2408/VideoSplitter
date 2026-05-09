@@ -625,8 +625,8 @@ void VideoWidget::processFrame(const QImage &img, int index, int count)
 
     const QPixmap px = QPixmap::fromImage(img);
 
-    // Während m_playTimer läuft nur sammeln, nicht anzeigen
-    if (!m_playTimer.isActive())
+    // Nur während des Sammelns anzeigen — danach übernimmt playTick/showFrame
+    if (m_fillingMap)
     {
         m_label->setImage(px, index, count, elapsed);
         m_label->update();

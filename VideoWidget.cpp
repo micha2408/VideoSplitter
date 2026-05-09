@@ -1,4 +1,4 @@
-#include "VideoWidget.h"
+﻿#include "VideoWidget.h"
 #include "Label.h"
 #include "RangeSlider.h"
 #include "ComfyBgRemover.h"
@@ -72,12 +72,14 @@ VideoWidget::VideoWidget(QWidget *parent)
     QMenu *menuModel = menuFx->addMenu("BiRefNet Modell");
     m_modelGroup = new QActionGroup(this);
     m_modelGroup->setExclusive(true);
-    const QStringList models = {
+    const QStringList models =
+    {
         "ZhengPeng7/BiRefNet",
         "ZhengPeng7/BiRefNet_HR",
         "ZhengPeng7/BiRefNet-portrait"
     };
-    for (const QString &m : models) {
+    for (const QString &m : models)
+    {
         QAction *a = menuModel->addAction(m);
         a->setCheckable(true);
         a->setChecked(m == "ZhengPeng7/BiRefNet");
@@ -155,7 +157,8 @@ VideoWidget::VideoWidget(QWidget *parent)
     // Connections
     connect(m_label, &Label::rightClicked, this, &VideoWidget::toggleView);
     connect(&m_previewTimer, &QTimer::timeout, this, &VideoWidget::previewTick);
-    connect(&gif, &QMovie::frameChanged, this, [this](int) {
+    connect(&gif, &QMovie::frameChanged, this, [this](int)
+    {
         processFrame(gif.currentImage(), gif.currentFrameNumber(), gif.frameCount());
     });
     connect(m_rangeSlider, &RangeSlider::lowerValueChanged, this, &VideoWidget::lowerValueChanged);
@@ -165,7 +168,8 @@ VideoWidget::VideoWidget(QWidget *parent)
     setAcceptDrops(true);
     initVlc();
 
-    QMetaObject::invokeMethod(this, [this] {
+    QMetaObject::invokeMethod(this, [this]
+    {
         QSettings settings;
         doDropEvent(settings.value("video").toString());
     }, Qt::QueuedConnection);
@@ -183,9 +187,11 @@ void VideoWidget::toggleView()
     if (m_bigMap.isEmpty()) return;
     m_showingGrid = !m_showingGrid;
     m_stack->setCurrentIndex(m_showingGrid ? 1 : 0);
-    if (m_showingGrid) {
+    if (m_showingGrid)
+    {
         paintGrid();
-    } else {
+    } else
+    {
         m_previewTimer.stop();
         setWindowTitle("VLC Frame Grabber");
     }
@@ -194,8 +200,10 @@ void VideoWidget::toggleView()
 bool VideoWidget::eventFilter(QObject *obj, QEvent *event)
 {
     if ((obj == m_gridLabel || obj == m_previewLabel)
-        && event->type() == QEvent::MouseButtonRelease) {
-        if (static_cast<QMouseEvent*>(event)->button() == Qt::RightButton) {
+        && event->type() == QEvent::MouseButtonRelease)
+    {
+        if (static_cast<QMouseEvent*>(event)->button() == Qt::RightButton)
+        {
             toggleView();
             return true;
         }
@@ -213,7 +221,8 @@ VideoWidget::GridDims VideoWidget::findOptimalGrid(int N, double cropAspect) con
     int    bestCols = 1, bestRows = N;
     double bestScore = 1e9;
 
-    for (int cols = 1; cols <= N; ++cols) {
+    for (int cols = 1; cols <= N; ++cols)
+    {
         const int baseRows = (N + cols - 1) / cols;
         for (int extra = 0; extra <= 1; ++extra) {          // try +0 and +1 extra row
             const int rows  = baseRows + extra;
@@ -228,7 +237,8 @@ VideoWidget::GridDims VideoWidget::findOptimalGrid(int N, double cropAspect) con
             // waste penalty is mild — user accepts +1 row/col
             const double score = distortion + waste * 0.15;
 
-            if (score < bestScore) {
+            if (score < bestScore)
+            {
                 bestScore = score;
                 bestCols  = cols;
                 bestRows  = rows;
@@ -264,7 +274,8 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
     m_previewList.clear();
     const QRect cropRect = m_label->cropRectInImageCoords();
 
-    for (int i = 0; i < N; ++i) {
+    for (int i = 0; i < N; ++i)
+    {
         const int key = first + i * step;
         if (!m_bigMap.contains(key)) continue;
 
@@ -310,7 +321,8 @@ void VideoWidget::paintGrid()
 
     // Start preview animation
     m_previewIndex = 0;
-    if (!m_previewList.isEmpty()) {
+    if (!m_previewList.isEmpty())
+    {
         m_previewLabel->setPixmap(m_previewList[0].scaled(
             m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
         const int interval = qMax(16, m_delay * step);
@@ -323,13 +335,15 @@ void VideoWidget::paintGrid()
 void VideoWidget::lowerValueChanged(int value)
 {
     m_labelLower->setText(QString::number(value));
-    if (value >= m_rangeSlider->upperValue()) {
+    if (value >= m_rangeSlider->upperValue())
+    {
         m_rangeSlider->setLowerValue(m_rangeSlider->upperValue() - 1);
         return;
     }
     if (m_showingGrid)
         paintGrid();
-    else if (m_bigMap.contains(value)) {
+    else if (m_bigMap.contains(value))
+    {
         m_label->setImage(m_bigMap[value], value, m_bigMap.size(), m_delay);
         m_label->update();
     }
@@ -338,13 +352,15 @@ void VideoWidget::lowerValueChanged(int value)
 void VideoWidget::upperValueChanged(int value)
 {
     m_labelUpper->setText(QString::number(value));
-    if (value <= m_rangeSlider->lowerValue()) {
+    if (value <= m_rangeSlider->lowerValue())
+    {
         m_rangeSlider->setUpperValue(m_rangeSlider->lowerValue() + 1);
         return;
     }
     if (m_showingGrid)
         paintGrid();
-    else if (m_bigMap.contains(value)) {
+    else if (m_bigMap.contains(value))
+    {
         m_label->setImage(m_bigMap[value], value, m_bigMap.size(), m_delay);
         m_label->update();
     }
@@ -422,11 +438,13 @@ void VideoWidget::doDropEvent(const QString &path)
     static const QStringList imageExts = {"png","jpg","jpeg","bmp","tif","tiff","webp"};
     const QString ext = QFileInfo(path).suffix().toLower();
 
-    if (path.endsWith(".gif", Qt::CaseInsensitive)) {
+    if (path.endsWith(".gif", Qt::CaseInsensitive))
+    {
         gif.setFileName(path);
         if (gif.isValid()) { eTime.invalidate(); gif.start(); }
         else return;
-    } else if (imageExts.contains(ext)) {
+    } else if (imageExts.contains(ext))
+    {
         // Single image → treat as one frame
         QPixmap px(path);
         if (px.isNull()) return;
@@ -446,7 +464,8 @@ void VideoWidget::doDropEvent(const QString &path)
         m_actBgRemove->setEnabled(true);
         m_label->setImage(px, 0, 1, m_delay);
         m_label->update();
-    } else {
+    } else
+    {
         frame = Frame();
         eTime.invalidate();
         if (!playFile(path)) return;
@@ -468,11 +487,13 @@ void VideoWidget::processFrame(const QImage &img, int index, int count)
     m_label->setImage(px, index, count, elapsed);
     m_label->update();
 
-    if (m_fillingMap && count > 0) {
+    if (m_fillingMap && count > 0)
+    {
         m_delay += elapsed;
         m_bigMap[index] = px;
 
-        if (m_bigMap.size() == count) {
+        if (m_bigMap.size() == count)
+        {
             m_delay /= count;
 
             m_rangeSlider->setRange(0, count - 1);
@@ -539,9 +560,11 @@ void VideoWidget::initVlc()
 
     libvlc_event_manager_t *em = libvlc_media_player_event_manager(m_mediaPlayer);
     libvlc_event_attach(em, libvlc_MediaPlayerEndReached,
-        [](const libvlc_event_t*, void *d) {
+        [](const libvlc_event_t*, void *d)
+        {
             auto self = static_cast<VideoWidget*>(d);
-            QMetaObject::invokeMethod(self, [self] {
+            QMetaObject::invokeMethod(self, [self]
+            {
                 self->frame.count   = self->frame.current;
                 self->frame.current = 0;
                 libvlc_media_player_stop(self->m_mediaPlayer);
@@ -552,7 +575,8 @@ void VideoWidget::initVlc()
 
 void VideoWidget::releaseVlc()
 {
-    if (m_mediaPlayer) {
+    if (m_mediaPlayer)
+    {
 #if (LIBVLC_VERSION_MAJOR == 4)
         libvlc_media_player_stop_async(m_mediaPlayer);
 #else
@@ -596,7 +620,8 @@ void VideoWidget::displayCallback(void *opaque, void *picture)
     }
 
     QMetaObject::invokeMethod(self,
-        [self, img = std::move(imageCopy), index, count]() mutable {
+        [self, img = std::move(imageCopy), index, count]() mutable
+        {
             self->processFrame(img, index, count);
         });
 }
@@ -648,7 +673,8 @@ void VideoWidget::startBgRemoval()
     connect(m_bgRemover, &ComfyBgRemover::frameReady, this, &VideoWidget::onBgFrameReady);
     connect(m_bgRemover, &ComfyBgRemover::progress,   this, &VideoWidget::onBgProgress);
     connect(m_bgRemover, &ComfyBgRemover::finished,   this, &VideoWidget::onBgFinished);
-    connect(m_bgRemover, &ComfyBgRemover::error, this, [this](const QString &msg) {
+    connect(m_bgRemover, &ComfyBgRemover::error, this, [this](const QString &msg)
+    {
         setWindowTitle("Fehler: " + msg);
         m_actBgRemove->setEnabled(true);
         m_bgRemover->deleteLater();
@@ -664,7 +690,8 @@ void VideoWidget::onBgFrameReady(int index, QPixmap result)
 {
     m_bigMap[index] = result;
     // Show current frame live if it's visible
-    if (!m_showingGrid && m_label->currentIndex() == index) {
+    if (!m_showingGrid && m_label->currentIndex() == index)
+    {
         m_label->setImage(result, index, m_bigMap.size(), m_delay);
         m_label->update();
     }
@@ -683,9 +710,11 @@ void VideoWidget::onBgFinished()
     m_bgRemover = nullptr;
     if (m_showingGrid)
         paintGrid();
-    else {
+    else
+    {
         const int cur = m_rangeSlider->lowerValue();
-        if (m_bigMap.contains(cur)) {
+        if (m_bigMap.contains(cur))
+        {
             m_label->setImage(m_bigMap[cur], cur, m_bigMap.size(), m_delay);
             m_label->update();
         }
@@ -718,7 +747,8 @@ void VideoWidget::applyCrop()
 
     QMap<int, QPixmap> newMap;
     int newIndex = 0;
-    for (int i = first; i <= last; i += step) {
+    for (int i = first; i <= last; i += step)
+    {
         if (!m_bigMap.contains(i)) continue;
         QPixmap px = m_bigMap[i];
         if (!cropRect.isEmpty() && cropRect != px.rect())
@@ -784,7 +814,8 @@ void VideoWidget::exportVideo()
 
     QMap<int, QPixmap> toExport;
     int idx = 0;
-    for (int i = first; i <= last; i += step) {
+    for (int i = first; i <= last; i += step)
+    {
         if (!m_bigMap.contains(i)) continue;
         QPixmap px = m_bigMap[i];
         if (!cropRect.isEmpty() && cropRect != px.rect())
@@ -794,15 +825,18 @@ void VideoWidget::exportVideo()
     if (toExport.isEmpty()) return;
 
     auto *exporter = new VideoExporter(this);
-    connect(exporter, &VideoExporter::progress, this, [this](int done, int total) {
+    connect(exporter, &VideoExporter::progress, this, [this](int done, int total)
+    {
         setWindowTitle(QString("Exportiere … (%1/%2)").arg(done).arg(total));
     });
-    connect(exporter, &VideoExporter::finished, this, [this, exporter](const QString &out) {
+    connect(exporter, &VideoExporter::finished, this, [this, exporter](const QString &out)
+    {
         setWindowTitle("VLC Frame Grabber");
         exporter->deleteLater();
         QMessageBox::information(this, "Export fertig", "Gespeichert:\n" + out);
     });
-    connect(exporter, &VideoExporter::error, this, [this, exporter](const QString &msg) {
+    connect(exporter, &VideoExporter::error, this, [this, exporter](const QString &msg)
+    {
         setWindowTitle("VLC Frame Grabber");
         exporter->deleteLater();
         QMessageBox::warning(this, "Export-Fehler", msg);

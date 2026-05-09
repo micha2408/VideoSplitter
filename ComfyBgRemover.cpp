@@ -1,4 +1,4 @@
-#include "ComfyBgRemover.h"
+﻿#include "ComfyBgRemover.h"
 
 #include <QBuffer>
 #include <QHttpMultiPart>
@@ -36,7 +36,8 @@ void ComfyBgRemover::cancel()
 
 void ComfyBgRemover::processNext()
 {
-    if (m_cancelled || m_queue.isEmpty()) {
+    if (m_cancelled || m_queue.isEmpty())
+    {
         emit finished();
         return;
     }
@@ -80,15 +81,18 @@ void ComfyBgRemover::uploadFrame()
         QNetworkRequest(QUrl(m_host + "/upload/image")), multiPart);
     multiPart->setParent(reply);
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply]
+    {
         reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
+        if (reply->error() != QNetworkReply::NoError)
+        {
             emit error("Upload fehlgeschlagen: " + reply->errorString());
             return;
         }
         const auto doc  = QJsonDocument::fromJson(reply->readAll());
         const QString fn = doc.object().value("name").toString();
-        if (fn.isEmpty()) {
+        if (fn.isEmpty())
+        {
             emit error("Upload: kein Dateiname in Antwort");
             return;
         }
@@ -140,15 +144,18 @@ void ComfyBgRemover::submitWorkflow(const QString &uploadedFilename)
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     auto *reply = m_net.post(req, body);
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply]
+    {
         reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
+        if (reply->error() != QNetworkReply::NoError)
+        {
             emit error("Prompt fehlgeschlagen: " + reply->errorString());
             return;
         }
         const auto doc = QJsonDocument::fromJson(reply->readAll());
         m_currentPromptId = doc.object().value("prompt_id").toString();
-        if (m_currentPromptId.isEmpty()) {
+        if (m_currentPromptId.isEmpty())
+        {
             emit error("Kein prompt_id in Antwort");
             return;
         }
@@ -163,7 +170,8 @@ void ComfyBgRemover::pollHistory()
     auto *reply = m_net.get(
         QNetworkRequest(QUrl(m_host + "/history/" + m_currentPromptId)));
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply]
+    {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) return; // retry next tick
 
@@ -180,7 +188,8 @@ void ComfyBgRemover::pollHistory()
         const auto outputs = job.value("outputs").toObject();
         const auto node3   = outputs.value("3").toObject();
         const auto images  = node3.value("images").toArray();
-        if (images.isEmpty()) {
+        if (images.isEmpty())
+        {
             emit error("Keine Ausgabe in Node 3");
             return;
         }
@@ -200,16 +209,19 @@ void ComfyBgRemover::downloadResult(const QString &filename, const QString &subf
 
     auto *reply = m_net.get(QNetworkRequest(QUrl(url)));
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply]
+    {
         reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
+        if (reply->error() != QNetworkReply::NoError)
+        {
             emit error("Download fehlgeschlagen: " + reply->errorString());
             return;
         }
 
         QImage img;
         img.loadFromData(reply->readAll(), "PNG");
-        if (img.isNull()) {
+        if (img.isNull())
+        {
             emit error("Ungültiges Bild vom Server");
             return;
         }

@@ -1,4 +1,4 @@
-#ifndef MAINWINDOW_H
+﻿#ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
 #include <QMainWindow>
@@ -47,7 +47,8 @@ private:
     int m_videoWidth  = 1280;
     int m_videoHeight = 720;
     int m_pitch       = 0;
-    struct Frame {
+    struct Frame
+    {
         Frame() : current(0), count(-1), image(640, 480, QImage::Format_ARGB32)
         { image.fill(Qt::black); }
         void newImage(int w, int h) { image = QImage(w, h, QImage::Format_ARGB32); }

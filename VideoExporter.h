@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <QObject>
 #include <QMap>
 #include <QPixmap>
@@ -12,7 +12,8 @@ class VideoExporter : public QObject
 public:
     enum Format { MP4, WebM, GIF, PNG_Sequence };
 
-    struct Options {
+    struct Options
+    {
         Format  format    = MP4;
         double  fps       = 25.0;
         QString outputPath;

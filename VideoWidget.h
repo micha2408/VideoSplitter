@@ -19,6 +19,7 @@ class Label;
 class RangeSlider;
 class QStackedWidget;
 class ComfyBgRemover;
+class VideoExporter;
 
 class VideoWidget : public QMainWindow
 {
@@ -126,6 +127,7 @@ private slots:
     void saveCurrentFrame();
     void saveSpriteSheet();
     void applyCrop();
+    void exportVideo();
 };
 
 #endif // MAINWINDOW_H

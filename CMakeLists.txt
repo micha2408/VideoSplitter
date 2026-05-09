@@ -25,6 +25,8 @@ qt_add_executable(${PROJECT_NAME}
     Label.h
     ComfyBgRemover.cpp
     ComfyBgRemover.h
+    VideoExporter.cpp
+    VideoExporter.h
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE

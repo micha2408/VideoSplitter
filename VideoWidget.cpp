@@ -2,6 +2,7 @@
 #include "Label.h"
 #include "RangeSlider.h"
 #include "ComfyBgRemover.h"
+#include "VideoExporter.h"
 
 #include <QDragEnterEvent>
 #include <QMimeData>
@@ -17,6 +18,7 @@
 #include <QSettings>
 #include <QFileInfo>
 #include <QFileDialog>
+#include <QMessageBox>
 #include <windows.h>
 #include <cmath>
 
@@ -51,8 +53,11 @@ VideoWidget::VideoWidget(QWidget *parent)
     bar->addMenu(menuSave);
     QAction *actSaveFrame  = menuSave->addAction("Aktuellen Frame …");
     QAction *actSaveGrid   = menuSave->addAction("Sprite-Sheet …");
-    connect(actSaveFrame, &QAction::triggered, this, &VideoWidget::saveCurrentFrame);
-    connect(actSaveGrid,  &QAction::triggered, this, &VideoWidget::saveSpriteSheet);
+    menuSave->addSeparator();
+    QAction *actExportVideo = menuSave->addAction("Video exportieren … (MP4 / WebM / GIF)");
+    connect(actSaveFrame,   &QAction::triggered, this, &VideoWidget::saveCurrentFrame);
+    connect(actSaveGrid,    &QAction::triggered, this, &VideoWidget::saveSpriteSheet);
+    connect(actExportVideo, &QAction::triggered, this, &VideoWidget::exportVideo);
 
     QMenu *menuEdit = new QMenu("Bearbeiten", bar);
     bar->addMenu(menuEdit);
@@ -68,15 +73,14 @@ VideoWidget::VideoWidget(QWidget *parent)
     m_modelGroup = new QActionGroup(this);
     m_modelGroup->setExclusive(true);
     const QStringList models = {
-        "BiRefNet-general", "BiRefNet_512x512", "BiRefNet-HR",
-        "BiRefNet-portrait", "BiRefNet-matting", "BiRefNet-HR-matting",
-        "BiRefNet_lite", "BiRefNet_lite-2K", "BiRefNet_dynamic",
-        "BiRefNet_lite-matting", "BiRefNet_toonout"
+        "ZhengPeng7/BiRefNet",
+        "ZhengPeng7/BiRefNet_HR",
+        "ZhengPeng7/BiRefNet-portrait"
     };
     for (const QString &m : models) {
         QAction *a = menuModel->addAction(m);
         a->setCheckable(true);
-        a->setChecked(m == "BiRefNet-general");
+        a->setChecked(m == "ZhengPeng7/BiRefNet");
         m_modelGroup->addAction(a);
     }
 
@@ -652,7 +656,7 @@ void VideoWidget::startBgRemoval()
     });
 
     const QAction *checked = m_modelGroup->checkedAction();
-    const QString model = checked ? checked->text() : "BiRefNet-general";
+    const QString model = checked ? checked->text() : "ZhengPeng7/BiRefNet";
     m_bgRemover->process(toProcess, model);
 }
 
@@ -746,6 +750,65 @@ void VideoWidget::applyCrop()
     m_label->update();
 
     if (m_showingGrid) paintGrid();
+}
+
+void VideoWidget::exportVideo()
+{
+    if (m_bigMap.isEmpty()) return;
+
+    // Format-Auswahl über Datei-Filter
+    const QString filter =
+        "MP4 Video (*.mp4);;"
+        "WebM mit Alpha (*.webm);;"
+        "Animiertes GIF (*.gif);;"
+        "PNG-Sequenz (*.png)";
+
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Video exportieren", QString(), filter);
+    if (path.isEmpty()) return;
+
+    VideoExporter::Options opts;
+    opts.fps        = m_delay > 0 ? 1000.0 / m_delay : 25.0;
+    opts.outputPath = path;
+
+    if (path.endsWith(".mp4",  Qt::CaseInsensitive)) opts.format = VideoExporter::MP4;
+    else if (path.endsWith(".webm", Qt::CaseInsensitive)) opts.format = VideoExporter::WebM;
+    else if (path.endsWith(".gif",  Qt::CaseInsensitive)) opts.format = VideoExporter::GIF;
+    else                                                   opts.format = VideoExporter::PNG_Sequence;
+
+    // Collect frames in slider range with step + crop applied
+    const int first = m_rangeSlider->lowerValue();
+    const int last  = m_rangeSlider->upperValue();
+    const int step  = m_sortSlider->value();
+    const QRect cropRect = m_label->cropRectInImageCoords();
+
+    QMap<int, QPixmap> toExport;
+    int idx = 0;
+    for (int i = first; i <= last; i += step) {
+        if (!m_bigMap.contains(i)) continue;
+        QPixmap px = m_bigMap[i];
+        if (!cropRect.isEmpty() && cropRect != px.rect())
+            px = px.copy(cropRect);
+        toExport[idx++] = px;
+    }
+    if (toExport.isEmpty()) return;
+
+    auto *exporter = new VideoExporter(this);
+    connect(exporter, &VideoExporter::progress, this, [this](int done, int total) {
+        setWindowTitle(QString("Exportiere … (%1/%2)").arg(done).arg(total));
+    });
+    connect(exporter, &VideoExporter::finished, this, [this, exporter](const QString &out) {
+        setWindowTitle("VLC Frame Grabber");
+        exporter->deleteLater();
+        QMessageBox::information(this, "Export fertig", "Gespeichert:\n" + out);
+    });
+    connect(exporter, &VideoExporter::error, this, [this, exporter](const QString &msg) {
+        setWindowTitle("VLC Frame Grabber");
+        exporter->deleteLater();
+        QMessageBox::warning(this, "Export-Fehler", msg);
+    });
+
+    exporter->exportFrames(toExport, opts);
 }
 
 void VideoWidget::saveSpriteSheet()

@@ -9,13 +9,15 @@ SOURCES += \
     RangeSlider.cpp \
     main.cpp \
     VideoWidget.cpp \
-    ComfyBgRemover.cpp
+    ComfyBgRemover.cpp \
+    VideoExporter.cpp
 
 HEADERS += \
     Label.h \
     RangeSlider.h \
     VideoWidget.h \
-    ComfyBgRemover.h
+    ComfyBgRemover.h \
+    VideoExporter.h
 
 # ----- libVLC Einbindung -----
 

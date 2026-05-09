@@ -100,7 +100,7 @@ void ComfyBgRemover::uploadFrame()
 
 void ComfyBgRemover::submitWorkflow(const QString &uploadedFilename)
 {
-    // Minimal workflow: LoadImage → BiRefNetRMBG → SaveImage
+    // Minimal workflow: LoadImage → BiRefNet_Hugo → SaveImage
     QJsonObject loadImage;
     loadImage["class_type"] = "LoadImage";
     loadImage["inputs"] = QJsonObject{
@@ -109,15 +109,13 @@ void ComfyBgRemover::submitWorkflow(const QString &uploadedFilename)
     };
 
     QJsonObject birefnet;
-    birefnet["class_type"] = "BiRefNetRMBG";
+    birefnet["class_type"] = "BiRefNet_Hugo";
     birefnet["inputs"] = QJsonObject{
-        {"image",            QJsonArray{"1", 0}},
-        {"model",            m_model},
-        {"mask_blur",        0},
-        {"mask_offset",      0},
-        {"invert_output",    false},
-        {"refine_foreground",true},
-        {"background",       "Alpha"}
+        {"image",                QJsonArray{"1", 0}},
+        {"model",                m_model},
+        {"load_local_model",     false},
+        {"background_color_name","transparency"},
+        {"device",               "auto"}
     };
 
     QJsonObject saveImage;

@@ -54,6 +54,11 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
         resetSelection();
         return;
     }
+    // Always reset to the full-image entry before computing a new selection —
+    // otherwise scale() returns offsets for the zoomed view, not the original image.
+    while (saList.size() > 1) saList.removeLast();
+    m_imageCropRect = {};
+
     QSize s;
     scale(s.rwidth(), s.rheight());
     const QRectF sel = QRectF(newSel).adjusted(-s.width(), -s.height(), -s.width(), -s.height());

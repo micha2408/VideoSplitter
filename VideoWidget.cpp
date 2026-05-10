@@ -23,6 +23,9 @@
 #include <QMessageBox>
 #include <QFile>
 #include <QTextStream>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QProcess>
 #include <cmath>
 
 // ─── Constructor ────────────────────────────────────────────────────────────
@@ -52,15 +55,29 @@ VideoWidget::VideoWidget(QWidget *parent)
     resGroup->addAction(act2048);
     connect(act2048, &QAction::triggered, this, [this]{ m_resolution = 2048; });
 
+    QMenu *menuOpen = new QMenu("Öffnen", bar);
+    bar->addMenu(menuOpen);
+    QAction *actOpen = menuOpen->addAction("Datei öffnen …");
+    actOpen->setShortcut(QKeySequence::Open);
+    menuOpen->addSeparator();
+    m_recentMenu = menuOpen->addMenu("Zuletzt geöffnet");
+    connect(actOpen, &QAction::triggered, this, &VideoWidget::openFile);
+    rebuildRecentMenu();
+
     QMenu *menuSave = new QMenu("Speichern", bar);
     bar->addMenu(menuSave);
-    QAction *actSaveFrame  = menuSave->addAction("Aktuellen Frame …");
-    QAction *actSaveGrid   = menuSave->addAction("Sprite-Sheet …");
+    QAction *actSaveGrid    = menuSave->addAction("Sprite-Sheet …");
+    QAction *actExportVideo = menuSave->addAction("Video exportieren … (MP4 / GIF / PNG-Sequenz)");
     menuSave->addSeparator();
-    QAction *actExportVideo = menuSave->addAction("Video exportieren … (MP4 / WebM / GIF)");
-    connect(actSaveFrame,   &QAction::triggered, this, &VideoWidget::saveCurrentFrame);
-    connect(actSaveGrid,    &QAction::triggered, this, &VideoWidget::saveSpriteSheet);
-    connect(actExportVideo, &QAction::triggered, this, &VideoWidget::exportVideo);
+    QMenu *menuOpenWith = menuSave->addMenu("Öffnen mit …");
+    QAction *actOpenExplorer  = menuOpenWith->addAction("Explorer");
+    QAction *actOpenXnView    = menuOpenWith->addAction("XnView");
+    QAction *actOpenFastStone = menuOpenWith->addAction("FastStone");
+    connect(actSaveGrid,       &QAction::triggered, this, &VideoWidget::saveSpriteSheet);
+    connect(actExportVideo,    &QAction::triggered, this, &VideoWidget::exportVideo);
+    connect(actOpenExplorer,   &QAction::triggered, this, &VideoWidget::openWithExplorer);
+    connect(actOpenXnView,     &QAction::triggered, this, &VideoWidget::openWithXnView);
+    connect(actOpenFastStone,  &QAction::triggered, this, &VideoWidget::openWithFastStone);
 
     QMenu *menuEdit = new QMenu("Bearbeiten", bar);
     bar->addMenu(menuEdit);
@@ -188,12 +205,10 @@ VideoWidget::VideoWidget(QWidget *parent)
 
     QMetaObject::invokeMethod(this, [this]
     {
-        QSettings settings;
-        doDropEvent(settings.value("video").toString());
+        const QStringList hist = QSettings().value("history/files").toStringList();
+        if (!hist.isEmpty()) doDropEvent(hist.first());
     }, Qt::QueuedConnection);
 }
-
-VideoWidget::~VideoWidget() = default;
 
 // ─── View toggle ────────────────────────────────────────────────────────────
 
@@ -518,6 +533,9 @@ void VideoWidget::doDropEvent(const QString &path)
     m_previewTimer.stop();
     m_playTimer.stop();
     if (m_extractor) { m_extractor->cancel(); m_extractor->deleteLater(); m_extractor = nullptr; }
+    if (m_bgRemover) { m_bgRemover->cancel(); m_bgRemover->deleteLater(); m_bgRemover = nullptr; }
+    m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
+    m_actBgRemove->setEnabled(false);
 
     m_label->resetSelAdjList();
     m_bigMap.clear();
@@ -569,8 +587,7 @@ void VideoWidget::doDropEvent(const QString &path)
         m_extractor->extract(path);
     }
 
-    QSettings settings;
-    settings.setValue("video", path);
+    addToHistory(path);
 }
 
 void VideoWidget::onFramesExtracted(QMap<int, QPixmap> frames, int delayMs)
@@ -712,23 +729,6 @@ void VideoWidget::onBgFinished()
 
 // ─── Speichern ────────────────────────────────────────────────────────────────
 
-void VideoWidget::saveCurrentFrame()
-{
-    if (m_bigMap.isEmpty()) return;
-    const int idx = m_rangeSlider->lowerValue();
-    if (!m_bigMap.contains(idx)) return;
-
-    QSettings s;
-    const QString path = QFileDialog::getSaveFileName(
-        this, "Frame speichern",
-        s.value("save/frameDir").toString(),
-        "PNG (*.png);;All files (*)");
-    if (path.isEmpty()) return;
-
-    if (m_bigMap[idx].save(path, "PNG"))
-        s.setValue("save/frameDir", QFileInfo(path).absolutePath());
-}
-
 void VideoWidget::applyCrop()
 {
     if (m_bigMap.isEmpty()) return;
@@ -740,6 +740,9 @@ void VideoWidget::applyCrop()
     const int last  = m_rangeSlider->upperValue();
     const int step  = m_sortSlider->value();
 
+    // Remember the current frame size — crop result will be scaled back up to this
+    const QSize targetSize = m_bigMap.first().size();
+
     QMap<int, QPixmap> newMap;
     int newIndex = 0;
     for (int i = first; i <= last; i += step)
@@ -747,7 +750,11 @@ void VideoWidget::applyCrop()
         if (!m_bigMap.contains(i)) continue;
         QPixmap px = m_bigMap[i];
         if (!cropRect.isEmpty() && cropRect != px.rect())
+        {
             px = px.copy(cropRect);
+            if (px.width() < targetSize.width() || px.height() < targetSize.height())
+                px = px.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        }
         newMap[newIndex++] = px;
     }
     if (newMap.isEmpty()) return;
@@ -790,7 +797,7 @@ void VideoWidget::exportVideo()
     QSettings s;
     const QString path = QFileDialog::getSaveFileName(
         this, "Video exportieren",
-        s.value("save/exportDir").toString(),
+        s.value("save/dir").toString(),
         filter);
     if (path.isEmpty()) return;
 
@@ -828,7 +835,7 @@ void VideoWidget::exportVideo()
     connect(exporter, &VideoExporter::finished, this, [this, exporter](const QString &out)
     {
         setWindowTitle("VideoConverter");
-        QSettings().setValue("save/exportDir", QFileInfo(out).absolutePath());
+        QSettings().setValue("save/dir", QFileInfo(out).absolutePath());
         exporter->deleteLater();
         QMessageBox::information(this, "Export fertig", "Gespeichert:\n" + out);
     });
@@ -887,7 +894,7 @@ void VideoWidget::saveSpriteSheet()
 
     QSettings s;
     const QString defaultName = QString("%1/%2x%3_%4frames_%5fps.png")
-        .arg(s.value("save/spriteDir").toString())
+        .arg(s.value("save/dir").toString())
         .arg(cols).arg(rows).arg(N)
         .arg(fps, 0, 'f', 1);
 
@@ -897,7 +904,7 @@ void VideoWidget::saveSpriteSheet()
 
     const QPixmap grid = composeGrid(first, last - first + 1, step);
     if (!grid.save(path, "PNG")) return;
-    s.setValue("save/spriteDir", QFileInfo(path).absolutePath());
+    s.setValue("save/dir", QFileInfo(path).absolutePath());
 
     // LSL-Script daneben ablegen
     const QString lslPath = QFileInfo(path).absolutePath() + "/"
@@ -913,4 +920,97 @@ void VideoWidget::saveSpriteSheet()
            << cols << ", " << rows << ", 0, " << N << ", "
            << QString::number(fps, 'f', 2) << ");\n";
     }
+}
+
+// ─── File open / history ─────────────────────────────────────────────────────
+
+void VideoWidget::openFile()
+{
+    const QStringList hist = QSettings().value("history/files").toStringList();
+    const QString startDir = hist.isEmpty()
+        ? QString() : QFileInfo(hist.first()).absolutePath();
+
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Datei öffnen", startDir,
+        "Alle unterstützten Dateien (*.mp4 *.mov *.avi *.mkv *.gif "
+            "*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;"
+        "Videos (*.mp4 *.mov *.avi *.mkv *.gif);;"
+        "Bilder (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;"
+        "Alle Dateien (*)");
+    if (!path.isEmpty()) doDropEvent(path);
+}
+
+void VideoWidget::addToHistory(const QString &path)
+{
+    QSettings s;
+    s.setValue("video", path);
+    QStringList hist = s.value("history/files").toStringList();
+    hist.removeAll(path);
+    hist.prepend(path);
+    if (hist.size() > 20) hist.resize(20);
+    s.setValue("history/files", hist);
+    rebuildRecentMenu();
+}
+
+void VideoWidget::rebuildRecentMenu()
+{
+    m_recentMenu->clear();
+    const QStringList hist = QSettings().value("history/files").toStringList();
+    if (hist.isEmpty())
+    {
+        QAction *empty = m_recentMenu->addAction("(leer)");
+        empty->setEnabled(false);
+        return;
+    }
+    for (const QString &f : hist)
+    {
+        QAction *a = m_recentMenu->addAction(
+            QString("%1  —  %2").arg(QFileInfo(f).fileName(), QFileInfo(f).absolutePath()));
+        connect(a, &QAction::triggered, this, [this, f]{ doDropEvent(f); });
+    }
+}
+
+// ─── Open with ───────────────────────────────────────────────────────────────
+
+void VideoWidget::openWithExplorer()
+{
+    const QString dir = QSettings().value("save/dir").toString();
+    if (dir.isEmpty() || !QDir(dir).exists())
+    {
+        QMessageBox::information(this, "Kein Pfad", "Noch kein Speicherpfad bekannt.");
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+}
+
+void VideoWidget::openWithXnView()
+{
+    openWithViewer("viewer/xnview", "XnView-Programmdatei wählen");
+}
+
+void VideoWidget::openWithFastStone()
+{
+    openWithViewer("viewer/faststone", "FastStone-Programmdatei wählen");
+}
+
+void VideoWidget::openWithViewer(const QString &settingsKey, const QString &title)
+{
+    QSettings s;
+    QString exe = s.value(settingsKey).toString();
+    if (exe.isEmpty() || !QFileInfo::exists(exe))
+    {
+        exe = QFileDialog::getOpenFileName(
+            this, title,
+            "C:/Program Files",
+            "Ausführbare Dateien (*.exe);;Alle Dateien (*)");
+        if (exe.isEmpty()) return;
+        s.setValue(settingsKey, exe);
+    }
+    const QString dir = s.value("save/dir").toString();
+    if (dir.isEmpty() || !QDir(dir).exists())
+    {
+        QMessageBox::information(this, "Kein Pfad", "Noch kein Speicherpfad bekannt.");
+        return;
+    }
+    QProcess::startDetached(exe, { dir });
 }

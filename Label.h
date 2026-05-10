@@ -22,9 +22,7 @@ public:
 
     // Crop in full-resolution image coordinates (set in mouseReleaseEvent)
     QRect cropRectInImageCoords() const {
-        if (imagePlus.image.isNull()) return {};
-        if (m_imageCropRect.isEmpty()) return imagePlus.image.rect();
-        return m_imageCropRect;
+        return m_imageCropRect;  // {} when no rubber-band selection active
     }
     double cropAspectRatio() const {
         if (saList.size() >= 2) {

@@ -90,6 +90,11 @@ private:
     // Frame extraction
     FrameExtractor *m_extractor = nullptr;
 
+    // File history
+    QMenu   *m_recentMenu = nullptr;
+    void addToHistory(const QString &path);
+    void rebuildRecentMenu();
+
     // Grid helpers
     struct GridDims { int cols, rows; };
     GridDims findOptimalGrid(int N, double cropAspect) const;
@@ -114,12 +119,17 @@ private slots:
     void onBgFrameReady(int index, QPixmap result);
     void onBgProgress(int done, int total);
     void onBgFinished();
+    void openFile();
     void applyCrop();
     void undoCrop();
-    void saveCurrentFrame();
     void saveSpriteSheet();
     void exportVideo();
+    void openWithExplorer();
+    void openWithXnView();
+    void openWithFastStone();
     void onFramesExtracted(QMap<int, QPixmap> frames, int delayMs);
+
+    void openWithViewer(const QString &settingsKey, const QString &title);
 };
 
 #endif // MAINWINDOW_H

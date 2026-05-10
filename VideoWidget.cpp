@@ -3,6 +3,7 @@
 #include "RangeSlider.h"
 #include "ComfyBgRemover.h"
 #include "VideoExporter.h"
+#include "FrameExtractor.h"
 
 #include <QDragEnterEvent>
 #include <QMimeData>
@@ -22,7 +23,6 @@
 #include <QMessageBox>
 #include <QFile>
 #include <QTextStream>
-#include <windows.h>
 #include <cmath>
 
 // ─── Constructor ────────────────────────────────────────────────────────────
@@ -30,10 +30,10 @@
 VideoWidget::VideoWidget(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle("VLC Frame Grabber");
+    setWindowTitle("VideoConverter");
     QCoreApplication::setOrganizationName("michaelSW");
     QCoreApplication::setOrganizationDomain("uyuni.de");
-    QCoreApplication::setApplicationName("FrameGrabber");
+    QCoreApplication::setApplicationName("VideoConverter");
 
     // Menu
     QMenuBar *bar = new QMenuBar(this);
@@ -105,7 +105,7 @@ VideoWidget::VideoWidget(QWidget *parent)
             m_bgRemover->deleteLater();
             m_bgRemover = nullptr;
             m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
-            setWindowTitle("VLC Frame Grabber");
+            setWindowTitle("VideoConverter");
         }
         else
         {
@@ -180,16 +180,11 @@ VideoWidget::VideoWidget(QWidget *parent)
     connect(m_label, &Label::rightClicked, this, &VideoWidget::toggleView);
     connect(&m_previewTimer, &QTimer::timeout, this, &VideoWidget::previewTick);
     connect(&m_playTimer,    &QTimer::timeout, this, &VideoWidget::playTick);
-    connect(&gif, &QMovie::frameChanged, this, [this](int)
-    {
-        processFrame(gif.currentImage(), gif.currentFrameNumber(), gif.frameCount());
-    });
     connect(m_rangeSlider, &RangeSlider::lowerValueChanged, this, &VideoWidget::lowerValueChanged);
     connect(m_rangeSlider, &RangeSlider::upperValueChanged, this, &VideoWidget::upperValueChanged);
     connect(m_sortSlider,  &QSlider::valueChanged,          this, &VideoWidget::sortValueChanged);
 
     setAcceptDrops(true);
-    initVlc();
 
     QMetaObject::invokeMethod(this, [this]
     {
@@ -198,10 +193,7 @@ VideoWidget::VideoWidget(QWidget *parent)
     }, Qt::QueuedConnection);
 }
 
-VideoWidget::~VideoWidget()
-{
-    releaseVlc();
-}
+VideoWidget::~VideoWidget() = default;
 
 // ─── View toggle ────────────────────────────────────────────────────────────
 
@@ -523,24 +515,19 @@ void VideoWidget::doDropEvent(const QString &path)
 {
     if (path.isEmpty()) return;
 
-    gif.stop();
     m_previewTimer.stop();
     m_playTimer.stop();
-#if (LIBVLC_VERSION_MAJOR == 4)
-    libvlc_media_player_stop_async(m_mediaPlayer);
-#else
-    libvlc_media_player_stop(m_mediaPlayer);
-#endif
+    if (m_extractor) { m_extractor->cancel(); m_extractor->deleteLater(); m_extractor = nullptr; }
 
     m_label->resetSelAdjList();
     m_bigMap.clear();
     m_previewList.clear();
     m_undoStack.clear();
     m_actUndo->setEnabled(false);
-    m_delay      = 0;
-    m_fillingMap = true;
-    m_paused     = false;
-    m_lastHandle = NoHandle;
+    m_delay       = 0;
+    m_fillingMap  = true;
+    m_paused      = false;
+    m_lastHandle  = NoHandle;
     m_showingGrid = false;
     m_stack->setCurrentIndex(0);
     m_rangeSlider->setEnabled(false);
@@ -550,48 +537,79 @@ void VideoWidget::doDropEvent(const QString &path)
     m_labelLower->setText("–");
     m_labelUpper->setText("–");
     m_labelSort->setText("–");
-    setWindowTitle("VLC Frame Grabber — sammle Frames …");
+    setWindowTitle("VideoConverter — extrahiere Frames …");
 
     static const QStringList imageExts = {"png","jpg","jpeg","bmp","tif","tiff","webp"};
     const QString ext = QFileInfo(path).suffix().toLower();
 
-    if (path.endsWith(".gif", Qt::CaseInsensitive))
+    if (imageExts.contains(ext))
     {
-        gif.setFileName(path);
-        if (gif.isValid()) { eTime.invalidate(); gif.start(); }
-        else return;
-    } else if (imageExts.contains(ext))
-    {
-        // Single image → treat as one frame
-        QPixmap px(path);
+        // Einzelbild → sofort laden
+        const QPixmap px(path);
         if (px.isNull()) return;
-        m_bigMap[0]   = px;
-        m_delay       = 40;
-        m_fillingMap  = false;
-        m_rangeSlider->setRange(0, 0);
-        m_rangeSlider->setLowerValue(0);
-        m_rangeSlider->setUpperValue(0);
-        m_sortSlider->setRange(1, 1);
-        m_sortSlider->setValue(1);
-        m_labelLower->setText("0");
-        m_labelUpper->setText("0");
-        m_labelSort->setText("1/1");
-        m_rangeSlider->blockSignals(false);
-        m_sortSlider->blockSignals(false);
-        m_actBgRemove->setEnabled(true);
-        m_label->setImage(px, 0, 1, m_delay);
-        m_label->update();
-    } else
-    {
-        frame = Frame();
-        eTime.invalidate();
-        if (!playFile(path)) return;
+        onFramesExtracted({{0, px}}, 40);
     }
+    else
+    {
+        // Video oder GIF → FrameExtractor
+        m_extractor = new FrameExtractor("ffmpeg", this);
+        connect(m_extractor, &FrameExtractor::progress, this, [this](int done, int total)
+        {
+            setWindowTitle(QString("VideoConverter — extrahiere Frames … (%1/%2)")
+                           .arg(done).arg(total));
+        });
+        connect(m_extractor, &FrameExtractor::finished,
+                this, &VideoWidget::onFramesExtracted);
+        connect(m_extractor, &FrameExtractor::error, this, [this](const QString &msg)
+        {
+            setWindowTitle("VideoConverter");
+            m_fillingMap = false;
+            QMessageBox::warning(this, "Extraktion fehlgeschlagen", msg);
+        });
+        m_extractor->extract(path);
+    }
+
     QSettings settings;
     settings.setValue("video", path);
 }
 
-// ─── Frame processing ────────────────────────────────────────────────────────
+void VideoWidget::onFramesExtracted(QMap<int, QPixmap> frames, int delayMs)
+{
+    if (m_extractor) { m_extractor->deleteLater(); m_extractor = nullptr; }
+
+    if (frames.isEmpty())
+    {
+        setWindowTitle("VideoConverter");
+        m_fillingMap = false;
+        return;
+    }
+
+    m_bigMap  = frames;
+    m_delay   = delayMs;
+    const int count = m_bigMap.size();
+
+    m_rangeSlider->setRange(0, count - 1);
+    m_rangeSlider->setLowerValue(0);
+    m_rangeSlider->setUpperValue(count - 1);
+    const int maxSort = qMax(1, count / 2);
+    m_sortSlider->setRange(1, maxSort);
+    m_sortSlider->setValue(1);
+    m_labelLower->setText("0");
+    m_labelUpper->setText(QString::number(count - 1));
+    m_labelSort->setText(QString("1/%1").arg(maxSort));
+    m_rangeSlider->blockSignals(false);
+    m_sortSlider->blockSignals(false);
+    m_rangeSlider->setEnabled(true);
+    m_sortSlider->setEnabled(true);
+    m_fillingMap = false;
+    m_actBgRemove->setEnabled(true);
+
+    // Erstes Bild anzeigen
+    showFrame(0);
+    startPlayback();
+}
+
+// ─── Undo ────────────────────────────────────────────────────────────────────
 
 void VideoWidget::pushUndo()
 {
@@ -613,211 +631,10 @@ void VideoWidget::updateTitle()
     const int step  = m_sortSlider->value();
     const double fps = step > 0 && m_delay > 0 ? 1000.0 / (m_delay * step) : 0.0;
     const QString status = m_paused ? "  ⏸ PAUSE" : "";
-    setWindowTitle(QString("VLC Frame Grabber  —  [%1 … %2]  step %3  |  %4 fps%5")
+    setWindowTitle(QString("VideoConverter  —  [%1 … %2]  step %3  |  %4 fps%5")
                    .arg(first).arg(last).arg(step)
                    .arg(fps, 0, 'f', 1).arg(status));
 }
-
-void VideoWidget::processFrame(const QImage &img, int index, int count)
-{
-    if (!eTime.isValid()) { eTime.start(); return; }
-
-    const int elapsed = static_cast<int>(eTime.elapsed());
-    eTime.restart();
-
-    const QPixmap px = QPixmap::fromImage(img);
-
-    // Nur während des Sammelns anzeigen — danach übernimmt playTick/showFrame
-    if (m_fillingMap)
-    {
-        m_label->setImage(px, index, count, elapsed);
-        m_label->update();
-    }
-
-    if (m_fillingMap && count > 0)
-    {
-        m_delay += elapsed;
-        m_bigMap[index] = px;
-
-        if (m_bigMap.size() == count)
-        {
-            m_delay /= count;
-
-            m_rangeSlider->setRange(0, count - 1);
-            m_rangeSlider->setLowerValue(0);
-            m_rangeSlider->setUpperValue(count - 1);
-
-            const int maxSort = qMax(1, count / 2);
-            m_sortSlider->setRange(1, maxSort);
-            m_sortSlider->setValue(1);
-
-            m_labelLower->setText("0");
-            m_labelUpper->setText(QString::number(count - 1));
-            m_labelSort->setText(QString("1/%1").arg(maxSort));
-
-            m_rangeSlider->blockSignals(false);
-            m_sortSlider->blockSignals(false);
-            m_rangeSlider->setEnabled(true);
-            m_sortSlider->setEnabled(true);
-            m_fillingMap = false;
-            m_actBgRemove->setEnabled(true);
-
-            // VLC pausieren — Playback läuft jetzt aus m_bigMap
-            if (m_mediaPlayer)
-                libvlc_media_player_set_pause(m_mediaPlayer, 1);
-            gif.setPaused(true);
-            startPlayback();
-        }
-    }
-}
-
-bool VideoWidget::playFile(const QString &path)
-{
-    if (!m_vlcInstance || !m_mediaPlayer) { qWarning() << "VLC not init"; return false; }
-    if (m_media) { libvlc_media_release(m_media); m_media = nullptr; }
-
-    QByteArray ba = QDir::toNativeSeparators(path).toUtf8();
-#if (LIBVLC_VERSION_MAJOR == 4)
-    m_media = libvlc_media_new_path(ba.constData());
-#else
-    m_media = libvlc_media_new_path(m_vlcInstance, ba.constData());
-#endif
-    if (!m_media) { qWarning() << "Cannot load:" << path; return false; }
-
-    libvlc_media_player_set_media(m_mediaPlayer, m_media);
-    libvlc_media_player_play(m_mediaPlayer);
-    return true;
-}
-
-// ─── VLC init / release ──────────────────────────────────────────────────────
-
-void VideoWidget::initVlc()
-{
-    wchar_t path[256];
-    QString dllPath(QDir::toNativeSeparators(VLC_SDK_PATH "/lib"));
-    dllPath.toWCharArray(path);
-    qDebug() << dllPath << " : " << SetDllDirectoryW(path);
-
-    m_vlcInstance = libvlc_new(0, nullptr);
-    if (!m_vlcInstance) { qWarning() << "libVLC init failed"; return; }
-
-    // VLC-Log umleiten — "set on top" Meldungen unterdrücken
-    libvlc_log_set(m_vlcInstance, [](void*, int level, const libvlc_log_t*,
-                                     const char *fmt, va_list args)
-    {
-        if (level >= LIBVLC_ERROR)
-        {
-            char buf[512];
-            vsnprintf(buf, sizeof(buf), fmt, args);
-            const QString msg(buf);
-            if (!msg.contains("set on top"))
-                qWarning() << "[VLC]" << msg;
-        }
-    }, nullptr);
-
-    m_mediaPlayer = libvlc_media_player_new(m_vlcInstance);
-    if (!m_mediaPlayer) { qWarning() << "Media player create failed"; return; }
-
-    libvlc_video_set_callbacks(m_mediaPlayer,
-        &VideoWidget::lockCallback,
-        &VideoWidget::unlockCallback,
-        &VideoWidget::displayCallback, this);
-
-    libvlc_video_set_format_callbacks(m_mediaPlayer,
-        &VideoWidget::formatCallback,
-        &VideoWidget::formatCleanupCallback);
-
-    libvlc_event_manager_t *em = libvlc_media_player_event_manager(m_mediaPlayer);
-    libvlc_event_attach(em, libvlc_MediaPlayerEndReached,
-        [](const libvlc_event_t*, void *d)
-        {
-            auto self = static_cast<VideoWidget*>(d);
-            QMetaObject::invokeMethod(self, [self]
-            {
-                self->frame.count   = self->frame.current;
-                self->frame.current = 0;
-                libvlc_media_player_stop(self->m_mediaPlayer);
-                libvlc_media_player_play(self->m_mediaPlayer);
-            });
-        }, this);
-}
-
-void VideoWidget::releaseVlc()
-{
-    if (m_mediaPlayer)
-    {
-#if (LIBVLC_VERSION_MAJOR == 4)
-        libvlc_media_player_stop_async(m_mediaPlayer);
-#else
-        libvlc_media_player_stop(m_mediaPlayer);
-#endif
-        libvlc_media_player_release(m_mediaPlayer);
-        m_mediaPlayer = nullptr;
-    }
-    if (m_media)        { libvlc_media_release(m_media);       m_media        = nullptr; }
-    if (m_vlcInstance)  { libvlc_release(m_vlcInstance);       m_vlcInstance  = nullptr; }
-}
-
-// ─── VLC callbacks ───────────────────────────────────────────────────────────
-
-void *VideoWidget::lockCallback(void *opaque, void **planes)
-{
-    VideoWidget *self = static_cast<VideoWidget*>(opaque);
-    self->m_frameMutex.lock();
-    *planes = self->frame.image.bits();
-    return nullptr;
-}
-
-void VideoWidget::unlockCallback(void *opaque, void *picture, void *const *planes)
-{
-    Q_UNUSED(picture); Q_UNUSED(planes);
-    static_cast<VideoWidget*>(opaque)->m_frameMutex.unlock();
-}
-
-void VideoWidget::displayCallback(void *opaque, void *picture)
-{
-    Q_UNUSED(picture);
-    VideoWidget *self = static_cast<VideoWidget*>(opaque);
-
-    QImage imageCopy;
-    int index, count;
-    {
-        QMutexLocker locker(&self->m_frameMutex);
-        imageCopy = self->frame.image.copy();
-        index     = self->frame.current++;
-        count     = self->frame.count;
-    }
-
-    QMetaObject::invokeMethod(self,
-        [self, img = std::move(imageCopy), index, count]() mutable
-        {
-            self->processFrame(img, index, count);
-        });
-}
-
-unsigned VideoWidget::formatCallback(void **opaque, char *chroma,
-                                     unsigned *width, unsigned *height,
-                                     unsigned *pitches, unsigned *lines)
-{
-    VideoWidget *self = static_cast<VideoWidget*>(*opaque);
-#if (LIBVLC_VERSION_MAJOR == 4)
-    chroma[0]='B'; chroma[1]='G'; chroma[2]='R'; chroma[3]='A';
-#else
-    chroma[0]='R'; chroma[1]='V'; chroma[2]='3'; chroma[3]='2';
-#endif
-    self->m_videoWidth  = static_cast<int>(*width);
-    self->m_videoHeight = static_cast<int>(*height);
-    self->m_pitch       = static_cast<int>(*width) * 4;
-    *pitches = self->m_pitch;
-    *lines   = self->m_videoHeight;
-    {
-        QMutexLocker locker(&self->m_frameMutex);
-        self->frame.newImage(self->m_videoWidth, self->m_videoHeight);
-    }
-    return 1;
-}
-
-void VideoWidget::formatCleanupCallback(void *) {}
 
 // ─── Background removal ───────────────────────────────────────────────────────
 
@@ -876,7 +693,7 @@ void VideoWidget::onBgProgress(int done, int total)
 
 void VideoWidget::onBgFinished()
 {
-    setWindowTitle("VLC Frame Grabber");
+    setWindowTitle("VideoConverter");
     m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
     m_bgRemover->deleteLater();
     m_bgRemover = nullptr;
@@ -1010,14 +827,14 @@ void VideoWidget::exportVideo()
     });
     connect(exporter, &VideoExporter::finished, this, [this, exporter](const QString &out)
     {
-        setWindowTitle("VLC Frame Grabber");
+        setWindowTitle("VideoConverter");
         QSettings().setValue("save/exportDir", QFileInfo(out).absolutePath());
         exporter->deleteLater();
         QMessageBox::information(this, "Export fertig", "Gespeichert:\n" + out);
     });
     connect(exporter, &VideoExporter::error, this, [this, exporter](const QString &msg)
     {
-        setWindowTitle("VLC Frame Grabber");
+        setWindowTitle("VideoConverter");
         exporter->deleteLater();
         QMessageBox::warning(this, "Export-Fehler", msg);
     });
@@ -1089,7 +906,7 @@ void VideoWidget::saveSpriteSheet()
     if (lslFile.open(QIODevice::WriteOnly | QIODevice::Text))
     {
         QTextStream ts(&lslFile);
-        ts << "// Auto-generated by VLC Frame Grabber\n";
+        ts << "// Auto-generated by VideoConverter\n";
         ts << "// Sprite-Sheet: " << cols << "x" << rows
            << ", " << N << " frames @ " << QString::number(fps, 'f', 1) << " fps\n";
         ts << "llSetTextureAnim(ANIM_ON | LOOP, ALL_SIDES, "

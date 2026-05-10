@@ -4,8 +4,8 @@
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
-    QCoreApplication::setOrganizationName("MichaelsSW");
-    QCoreApplication::setApplicationName("VideoGrabber");
+    QCoreApplication::setOrganizationName("michaelSW");
+    QCoreApplication::setApplicationName("VideoConverter");
     VideoWidget w;
     w.show();
     return app.exec();

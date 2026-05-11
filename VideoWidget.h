@@ -97,8 +97,7 @@ private:
 
     // Grid helpers
     struct GridDims { int cols, rows; };
-    GridDims findOptimalGrid(int N, double cropAspect) const;
-    double   getCropAspect() const;
+    GridDims findOptimalGrid(int N) const;
 
     QPixmap composeGrid(int first, int count, int step);
     void paintGrid();

@@ -246,10 +246,9 @@ bool VideoWidget::eventFilter(QObject *obj, QEvent *event)
 
 // ─── Grid layout optimisation ────────────────────────────────────────────────
 
-VideoWidget::GridDims VideoWidget::findOptimalGrid(int N, double cropAspect) const
+VideoWidget::GridDims VideoWidget::findOptimalGrid(int N) const
 {
     if (N <= 0) return {1, 1};
-    if (cropAspect <= 0.0) cropAspect = 1.0;
 
     int    bestCols = 1, bestRows = N;
     double bestScore = 1e9;
@@ -265,7 +264,7 @@ VideoWidget::GridDims VideoWidget::findOptimalGrid(int N, double cropAspect) con
             const double cellAspect = static_cast<double>(rows) / cols;
 
             // symmetric log-ratio: 0 = perfect, grows for over- and under-stretch
-            const double distortion = std::abs(std::log(cellAspect / cropAspect));
+            const double distortion = std::abs(std::log(cellAspect));
 
             // waste penalty is mild — user accepts +1 row/col
             const double score = distortion + waste * 0.15;
@@ -279,11 +278,6 @@ VideoWidget::GridDims VideoWidget::findOptimalGrid(int N, double cropAspect) con
         }
     }
     return {bestCols, bestRows};
-}
-
-double VideoWidget::getCropAspect() const
-{
-    return m_label->cropAspectRatio();
 }
 
 // ─── Playback through m_bigMap selection ─────────────────────────────────────
@@ -332,9 +326,10 @@ void VideoWidget::playTick()
 
     const QRect cropRect = m_label->cropRectInImageCoords();
     QPixmap px = m_bigMap[m_playIndex];
-    if (!cropRect.isEmpty() && cropRect != px.rect())
+    if(cropRect.isValid())
+    {
         px = px.copy(cropRect);
-
+    }
     m_label->setImage(px, m_playIndex, m_bigMap.size(), m_delay);
     m_label->update();
 
@@ -348,8 +343,8 @@ void VideoWidget::playTick()
 QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
 {
     const int N = qMax(1, frameCount / step);
-    const double cropAspect = getCropAspect();
-    const auto [cols, rows] = findOptimalGrid(N, cropAspect);
+    // const double cropAspect = getCropAspect();
+    const auto [cols, rows] = findOptimalGrid(N);
     m_gridCols = cols;
     m_gridRows = rows;
 
@@ -387,7 +382,7 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
 
     // Window title: grid info + stretch factor
     const double cellAspect = static_cast<double>(rows) / cols;
-    const double stretch    = (cropAspect > 0.0) ? cellAspect / cropAspect : 1.0;
+    const double stretch    = /*(cropAspect > 0.0) ? */cellAspect/* / cropAspect : 1.0*/;
     const int    waste      = cols * rows - N;
     setWindowTitle(
         QString("Frame Grabber  —  %1×%2  |  %3 frames  |  Stretch %4×  |  Verschnitt %5")
@@ -537,7 +532,6 @@ void VideoWidget::doDropEvent(const QString &path)
     m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
     m_actBgRemove->setEnabled(false);
 
-    m_label->resetSelAdjList();
     m_bigMap.clear();
     m_previewList.clear();
     m_undoStack.clear();
@@ -648,9 +642,10 @@ void VideoWidget::updateTitle()
     const int step  = m_sortSlider->value();
     const double fps = step > 0 && m_delay > 0 ? 1000.0 / (m_delay * step) : 0.0;
     const QString status = m_paused ? "  ⏸ PAUSE" : "";
-    setWindowTitle(QString("VideoConverter  —  [%1 … %2]  step %3  |  %4 fps%5")
+    setWindowTitle(QString("VideoConverter  —  [%1 … %2]  step %3  |  %6*%7  |  %4 fps%5")
                    .arg(first).arg(last).arg(step)
-                   .arg(fps, 0, 'f', 1).arg(status));
+                   .arg(fps, 0, 'f', 1).arg(status)
+                   .arg(m_bigMap[0].width()).arg(m_bigMap[0].height()));
 }
 
 // ─── Background removal ───────────────────────────────────────────────────────
@@ -777,7 +772,6 @@ void VideoWidget::applyCrop()
     m_rangeSlider->blockSignals(false);
     m_sortSlider->blockSignals(false);
 
-    m_label->resetSelAdjList();
     m_label->setImage(m_bigMap[0], 0, count, m_delay);
     m_label->update();
 
@@ -889,7 +883,7 @@ void VideoWidget::saveSpriteSheet()
     const int last  = m_rangeSlider->upperValue();
     const int step  = m_sortSlider->value();
     const int N     = qMax(1, (last - first + 1) / step);
-    const auto [cols, rows] = findOptimalGrid(N, getCropAspect());
+    const auto [cols, rows] = findOptimalGrid(N);
     const double fps = m_delay > 0 ? 1000.0 / (m_delay * step) : 25.0;
 
     QSettings s;

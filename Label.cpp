@@ -1,31 +1,51 @@
 #include "Label.h"
 #include <QMouseEvent>
-#include <QResizeEvent>
-#include <QDebug>
 #include <QPainter>
-
-//#include <QTimer>
+#include <QApplication>
 
 void Label::mousePressEvent(QMouseEvent *ev)
 {
+    m_lastPos = ev->pos();
     if (ev->button() != Qt::LeftButton) return;
     origin = ev->pos();
-    if (ev->modifiers() & Qt::ControlModifier) return;
+    if (ev->modifiers() & Qt::ControlModifier)
+    {
+        m_cropState = CropState::Preview;
+        update();
+        return;
+    }
     if (!rubberBand)
         rubberBand = new QRubberBand(QRubberBand::Rectangle, this);
+    m_imageCropRect = QRect();
     rubberBand->setGeometry(QRect(origin, QSize()));
     rubberBand->show();
 }
 
 void Label::mouseMoveEvent(QMouseEvent *ev)
 {
+    auto deltaPos = m_lastPos - ev->pos();
+    m_lastPos = ev->pos();
     if (ev->modifiers() & Qt::ControlModifier)
+        m_cropState = CropState::Preview;
+    if (m_cropState != CropState::None)
     {
-        setAdjustion(origin - ev->pos());
+        m_cropState = CropState::Preview;
+        if (m_newSel.isValid() && m_newSel.contains(ev->pos()))
+        {
+            m_newSel.adjust(-deltaPos.x(), -deltaPos.y(), -deltaPos.x(), -deltaPos.y());
+            m_cropState = CropState::Dragging;
+        }
         return;
     }
     if (rubberBand)
         rubberBand->setGeometry(QRect(origin, ev->pos()).normalized());
+}
+
+void Label::keyPressEvent(QKeyEvent *ev)
+{
+    if (QApplication::mouseButtons() & Qt::LeftButton)
+        m_cropState = CropState::Preview;
+    QLabel::keyPressEvent(ev);
 }
 
 void Label::mouseReleaseEvent(QMouseEvent *ev)
@@ -35,48 +55,37 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
         emit rightClicked();
         return;
     }
-    if (ev->modifiers() & Qt::ControlModifier)
+    if (m_cropState != CropState::None)
     {
-        // STRG ist gedrückt
-        qDebug() << origin << ev->pos();
-        return;
+        m_cropState = CropState::None;
     }
-    if (!rubberBand) return;
-    rubberBand->hide();
-    QRect newSel = QRect(origin, ev->pos()).normalized();
-    if(newSel.width()<8)
+    else
     {
-        resetSelection();
-        return;
+        if (!rubberBand) return;
+        rubberBand->hide();
+        m_newSel = QRect(origin, ev->pos()).normalized();
+        if (m_newSel.width() < 8 || m_newSel.height() < 8)
+        {
+            m_imageCropRect = QRect();
+            m_newSel        = QRect();
+            return;
+        }
     }
-    if(newSel.height()<8)
-    {
-        resetSelection();
-        return;
-    }
-    // Always reset to the full-image entry before computing a new selection —
-    // otherwise scale() returns offsets for the zoomed view, not the original image.
-    while (saList.size() > 1) saList.removeLast();
-    m_imageCropRect = {};
 
     QSize s;
     scale(s.rwidth(), s.rheight());
-    const QRectF sel = QRectF(newSel).adjusted(-s.width(), -s.height(), -s.width(), -s.height());
-    saList << SelAdj(newSel.adjusted(-s.width(), -s.height(), -s.width(), -s.height()));
-
-    // Store crop in image pixel coordinates (immune to resize)
-    if (!imagePlus.image.isNull()) {
-        const QSize scaledSz = imagePlus.image.size().scaled(size(), Qt::KeepAspectRatio);
-        if (!scaledSz.isEmpty()) {
-            const double sw = static_cast<double>(imagePlus.image.width())  / scaledSz.width();
-            const double sh = static_cast<double>(imagePlus.image.height()) / scaledSz.height();
-            m_imageCropRect = QRect(
-                static_cast<int>(sel.x()      * sw),
-                static_cast<int>(sel.y()      * sh),
-                static_cast<int>(sel.width()  * sw),
-                static_cast<int>(sel.height() * sh)
-            ).intersected(imagePlus.image.rect());
-        }
+    const QRectF sel = QRectF(m_newSel).adjusted(-s.width(), -s.height(), -s.width(), -s.height());
+    const QSize scaledSz = imagePlus.image.size().scaled(size(), Qt::KeepAspectRatio);
+    if (!scaledSz.isEmpty())
+    {
+        const double sw = static_cast<double>(imagePlus.image.width())  / scaledSz.width();
+        const double sh = static_cast<double>(imagePlus.image.height()) / scaledSz.height();
+        m_imageCropRect = QRect(
+            static_cast<int>(sel.x()      * sw),
+            static_cast<int>(sel.y()      * sh),
+            static_cast<int>(sel.width()  * sw),
+            static_cast<int>(sel.height() * sh)
+        ).intersected(imagePlus.image.rect());
     }
     update();
 }
@@ -84,72 +93,30 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
 const QPixmap &Label::scale(int &x, int &y)
 {
     static QPixmap scaled;
-    scaled = imagePlus.image;
-    if (saList.isEmpty()) {
-        saList << SelAdj(scaled.rect());
-    } else {
-        // Keep saList[0] in sync with the actual image dimensions
-        saList[0].selection = scaled.rect();
-    }
-    for (auto sa : saList) {
-        scaled = scaled.copy(sa.selection.toRect());
-        scaled = scaled.scaled(size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
-    x = (width() - scaled.width()) / 2;
+    scaled = imagePlus.image.scaled(size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    x = (width()  - scaled.width())  / 2;
     y = (height() - scaled.height()) / 2;
     return scaled;
 }
 
-QRectF Label::normalizeRect(const QRectF &small, const QRectF &big)
-{
-    return QRectF(
-        small.x()      / big.width(),
-        small.y()      / big.height(),
-        small.width()  / big.width(),
-        small.height() / big.height()
-        );
-}
-
-QRectF Label::scaleRect(const QRectF &norm, const QRectF &big)
-{
-    return QRectF(
-        norm.x()      * big.width(),
-        norm.y()      * big.height(),
-        norm.width()  * big.width(),
-        norm.height() * big.height()
-        );
-}
-
-void Label::resizeEvent(QResizeEvent *ev)
-{
-    QRectF bigRect(0, 0, ev->oldSize().width(), ev->oldSize().height());
-    QRectF newBigRect(0, 0, ev->size().width(), ev->size().height());
-
-    for(auto &sa : saList)
-    {
-        QRectF smallRect=sa.selection; // soll proportional mitskalieren
-        QRectF smallNorm = normalizeRect(smallRect, bigRect);
-        QRectF newSmall = scaleRect(smallNorm, newBigRect);
-        sa.selection=newSmall;
-    }
-}
-
 void Label::paintEvent(QPaintEvent *e)
 {
-    if(imagePlus.image.isNull())
+    if (imagePlus.image.isNull())
     {
         QLabel::paintEvent(e);
         return;
     }
     QPainter p(this);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    int x=0;
-    int y=0;
-    const QPixmap &scaled=scale(x,y);
-    p.fillRect(rect(),QColor(Qt::blue));
+    int x = 0, y = 0;
+    const QPixmap &scaled = scale(x, y);
+    p.fillRect(rect(), QColor(Qt::blue));
     p.drawPixmap(x, y, scaled);
     p.setPen(QPen(Qt::red, 2));
     p.drawRect(x, y, scaled.width(), scaled.height());
-
-
+    if (m_cropState != CropState::None && m_newSel.isValid())
+    {
+        p.setPen(QPen(m_cropState == CropState::Dragging ? Qt::blue : Qt::green, 2));
+        p.drawRect(m_newSel.adjusted(2, 2, -2, -2));
+    }
 }

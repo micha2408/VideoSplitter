@@ -81,12 +81,6 @@ VideoWidget::VideoWidget(QWidget *parent)
 
     QMenu *menuEdit = new QMenu("Bearbeiten", bar);
     bar->addMenu(menuEdit);
-    QAction *actApplyCrop = menuEdit->addAction("Zuschnitt anwenden  (Pixel-Crop + Zeitbereich + Step)");
-    connect(actApplyCrop, &QAction::triggered, this, &VideoWidget::applyCrop);
-    m_actUndo = menuEdit->addAction("Rückgängig  (letzter Zuschnitt)");
-    m_actUndo->setEnabled(false);
-    connect(m_actUndo, &QAction::triggered, this, &VideoWidget::undoCrop);
-    menuEdit->addSeparator();
     QAction *actPause = menuEdit->addAction("Pause / Weiter  [Space]");
     connect(actPause, &QAction::triggered, this, &VideoWidget::togglePause);
 
@@ -382,12 +376,11 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
 
     // Window title: grid info + stretch factor
     const double cellAspect = static_cast<double>(rows) / cols;
-    const double stretch    = /*(cropAspect > 0.0) ? */cellAspect/* / cropAspect : 1.0*/;
     const int    waste      = cols * rows - N;
     setWindowTitle(
         QString("Frame Grabber  —  %1×%2  |  %3 frames  |  Stretch %4×  |  Verschnitt %5")
             .arg(cols).arg(rows).arg(N)
-            .arg(QString::number(stretch, 'f', 2))
+            .arg(QString::number(cellAspect, 'f', 2))
             .arg(waste));
 
     return result;
@@ -534,8 +527,6 @@ void VideoWidget::doDropEvent(const QString &path)
 
     m_bigMap.clear();
     m_previewList.clear();
-    m_undoStack.clear();
-    m_actUndo->setEnabled(false);
     m_delay       = 0;
     m_fillingMap  = true;
     m_paused      = false;
@@ -622,18 +613,6 @@ void VideoWidget::onFramesExtracted(QMap<int, QPixmap> frames, int delayMs)
 
 // ─── Undo ────────────────────────────────────────────────────────────────────
 
-void VideoWidget::pushUndo()
-{
-    UndoState s;
-    s.bigMap = m_bigMap;
-    s.delay  = m_delay;
-    s.lower  = m_rangeSlider->lowerValue();
-    s.upper  = m_rangeSlider->upperValue();
-    s.step   = m_sortSlider->value();
-    m_undoStack.push(s);
-    m_actUndo->setEnabled(true);
-}
-
 void VideoWidget::updateTitle()
 {
     if (m_fillingMap || m_bigMap.isEmpty()) return;
@@ -653,9 +632,6 @@ void VideoWidget::updateTitle()
 void VideoWidget::startBgRemoval()
 {
     if (m_bigMap.isEmpty()) return;
-
-    // Undo-State sichern — so kann man zurück und ein anderes Modell probieren
-    pushUndo();
 
     // Only process frames in current slider range with step
     const int first = m_rangeSlider->lowerValue();
@@ -724,60 +700,6 @@ void VideoWidget::onBgFinished()
 
 // ─── Speichern ────────────────────────────────────────────────────────────────
 
-void VideoWidget::applyCrop()
-{
-    if (m_bigMap.isEmpty()) return;
-
-    pushUndo();
-
-    const QRect cropRect = m_label->cropRectInImageCoords();
-    const int first = m_rangeSlider->lowerValue();
-    const int last  = m_rangeSlider->upperValue();
-    const int step  = m_sortSlider->value();
-
-    // Remember the current frame size — crop result will be scaled back up to this
-    const QSize targetSize = m_bigMap.first().size();
-
-    QMap<int, QPixmap> newMap;
-    int newIndex = 0;
-    for (int i = first; i <= last; i += step)
-    {
-        if (!m_bigMap.contains(i)) continue;
-        QPixmap px = m_bigMap[i];
-        if (!cropRect.isEmpty() && cropRect != px.rect())
-        {
-            px = px.copy(cropRect);
-            if (px.width() < targetSize.width() || px.height() < targetSize.height())
-                px = px.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        }
-        newMap[newIndex++] = px;
-    }
-    if (newMap.isEmpty()) return;
-
-    m_bigMap = newMap;
-    m_delay  = qMax(16, m_delay * step);
-
-    const int count = m_bigMap.size();
-    m_rangeSlider->blockSignals(true);
-    m_sortSlider->blockSignals(true);
-    m_rangeSlider->setRange(0, count - 1);
-    m_rangeSlider->setLowerValue(0);
-    m_rangeSlider->setUpperValue(count - 1);
-    const int maxSort = qMax(1, count / 2);
-    m_sortSlider->setRange(1, maxSort);
-    m_sortSlider->setValue(1);
-    m_labelLower->setText("0");
-    m_labelUpper->setText(QString::number(count - 1));
-    m_labelSort->setText(QString("1/%1").arg(maxSort));
-    m_rangeSlider->blockSignals(false);
-    m_sortSlider->blockSignals(false);
-
-    m_label->setImage(m_bigMap[0], 0, count, m_delay);
-    m_label->update();
-
-    if (m_showingGrid) paintGrid();
-}
-
 void VideoWidget::exportVideo()
 {
     if (m_bigMap.isEmpty()) return;
@@ -841,38 +763,6 @@ void VideoWidget::exportVideo()
     });
 
     exporter->exportFrames(toExport, opts);
-}
-
-void VideoWidget::undoCrop()
-{
-    if (m_undoStack.isEmpty()) return;
-
-    const UndoState s = m_undoStack.pop();
-    m_bigMap = s.bigMap;
-    m_delay  = s.delay;
-    m_actUndo->setEnabled(!m_undoStack.isEmpty());
-
-    m_rangeSlider->blockSignals(true);
-    m_sortSlider->blockSignals(true);
-    m_rangeSlider->setRange(0, m_bigMap.size() - 1);
-    m_rangeSlider->setLowerValue(s.lower);
-    m_rangeSlider->setUpperValue(s.upper);
-    m_sortSlider->setRange(1, qMax(1, m_bigMap.size() / 2));
-    m_sortSlider->setValue(s.step);
-    m_labelLower->setText(QString::number(s.lower));
-    m_labelUpper->setText(QString::number(s.upper));
-    m_labelSort->setText(QString("%1/%2").arg(s.step)
-                         .arg(qMax(1, m_bigMap.size() / 2)));
-    m_rangeSlider->blockSignals(false);
-    m_sortSlider->blockSignals(false);
-
-    if (!m_bigMap.isEmpty())
-    {
-        m_label->setImage(m_bigMap[s.lower], s.lower, m_bigMap.size(), m_delay);
-        m_label->update();
-    }
-    if (m_showingGrid) paintGrid();
-    else startPlayback();
 }
 
 void VideoWidget::saveSpriteSheet()

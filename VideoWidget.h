@@ -5,7 +5,6 @@
 #include <QMap>
 #include <QTimer>
 #include <QList>
-#include <QStack>
 #include <QLabel>
 #include <QSlider>
 #include <QElapsedTimer>
@@ -40,18 +39,6 @@ private:
     QMap<int, QPixmap> m_bigMap;
     int  m_delay      = 0;
     bool m_fillingMap = false;
-
-    // Undo stack (applyCrop + BiRefNet each push one level)
-    struct UndoState
-    {
-        QMap<int, QPixmap> bigMap;
-        int delay = 0;
-        int lower = 0;
-        int upper = 0;
-        int step  = 1;
-    };
-    QStack<UndoState> m_undoStack;
-    QAction          *m_actUndo = nullptr;
 
     // UI
     QStackedWidget *m_stack;
@@ -103,7 +90,6 @@ private:
     void paintGrid();
     void startPlayback();
     void updateTitle();
-    void pushUndo();
     void showFrame(int index);
 
 private slots:
@@ -119,8 +105,6 @@ private slots:
     void onBgProgress(int done, int total);
     void onBgFinished();
     void openFile();
-    void applyCrop();
-    void undoCrop();
     void saveSpriteSheet();
     void exportVideo();
     void openWithExplorer();

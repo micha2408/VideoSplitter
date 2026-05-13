@@ -33,7 +33,10 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
 
 private:
-    void doDropEvent(const QString &path);
+    bool copyDirectoryRecursive(const QString &sourceDir,
+                                const QString &targetDir,
+                                bool overwrite = false);
+    void doDropEvent(QString path);
 
     // All captured frames (index → pixmap)
     QMap<int, QPixmap> m_bigMap;
@@ -50,7 +53,7 @@ private:
     QLabel         *m_labelSort;
     RangeSlider    *m_rangeSlider;
     QSlider        *m_sortSlider;
-
+    QString chromeSettings;
     // Grid preview animation
     QList<QPixmap> m_previewList;
     QTimer         m_previewTimer;
@@ -78,9 +81,12 @@ private:
     FrameExtractor *m_extractor = nullptr;
 
     // File history
-    QMenu   *m_recentMenu = nullptr;
+    QMenu   *m_recentMenu   = nullptr;
+    QMenu   *m_exportedMenu = nullptr;
     void addToHistory(const QString &path);
+    void addToExported(const QString &path);
     void rebuildRecentMenu();
+    void rebuildExportedMenu();
 
     // Grid helpers
     struct GridDims { int cols, rows; };

@@ -27,13 +27,87 @@
 #include <QUrl>
 #include <QProcess>
 #include <cmath>
+#include <QRegularExpression>
 
 // ─── Constructor ────────────────────────────────────────────────────────────
+
+/**
+ * Kopiert ein Verzeichnis rekursiv inkl. aller Unterordner und Dateien.
+ *
+ * @param sourceDir   Quellverzeichnis (muss existieren)
+ * @param targetDir   Zielverzeichnis (wird angelegt, falls nicht vorhanden)
+ * @param overwrite   true = bestehende Zieldateien überschreiben,
+ *                    false = vorhandene Dateien überspringen
+ * @return true bei Erfolg, false wenn mindestens ein Fehler auftrat
+ */
+bool VideoWidget::copyDirectoryRecursive(const QString &sourceDir,
+                                         const QString &targetDir,
+                                         bool overwrite)
+{
+    QDir source(sourceDir);
+    if (!source.exists()) {
+        qWarning() << "Quellverzeichnis existiert nicht:" << sourceDir;
+        return false;
+    }
+
+    QDir target(targetDir);
+    if (!target.exists() && !QDir().mkpath(targetDir)) {
+        qWarning() << "Zielverzeichnis konnte nicht angelegt werden:" << targetDir;
+        return false;
+    }
+
+    bool success = true;
+
+    // Unterverzeichnisse rekursiv abarbeiten
+    const QFileInfoList dirs = source.entryInfoList(
+        QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+    for (const QFileInfo &dirInfo : dirs) {
+        const QString srcPath = dirInfo.absoluteFilePath();
+        const QString dstPath = target.absoluteFilePath(dirInfo.fileName());
+        if (!copyDirectoryRecursive(srcPath, dstPath, overwrite))
+            success = false;
+    }
+
+    // Dateien kopieren
+    const QFileInfoList files = source.entryInfoList(
+        QDir::Files | QDir::NoSymLinks);
+    for (const QFileInfo &fileInfo : files) {
+        const QString srcPath = fileInfo.absoluteFilePath();
+        const QString dstPath = target.absoluteFilePath(fileInfo.fileName());
+
+        if (QFile::exists(dstPath)) {
+            if (!overwrite) {
+                qDebug() << "Übersprungen (existiert bereits):" << dstPath;
+                continue;
+            }
+            if (!QFile::remove(dstPath)) {
+                qWarning() << "Konnte Zieldatei nicht überschreiben:" << dstPath;
+                success = false;
+                continue;
+            }
+        }
+
+        if (!QFile::copy(srcPath, dstPath)) {
+            qWarning() << "Kopie fehlgeschlagen:" << srcPath << "->" << dstPath;
+            success = false;
+        }
+    }
+
+    return success;
+}
 
 VideoWidget::VideoWidget(QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowTitle("VideoConverter");
+    chromeSettings = "C:\\Users\\micha\\AppData\\Local\\Google\\Chrome\\User Data\\Default2";
+    // bool ok = copyDirectoryRecursive(
+    //     "C:\\Users\\micha\\AppData\\Local\\Google\\Chrome\\User Data\\Default",
+    //     chromeSettings,
+    //     false);
+
+    // if (!ok) qWarning() << "Mindestens eine Datei konnte nicht kopiert werden.";
+
     QCoreApplication::setOrganizationName("michaelSW");
     QCoreApplication::setOrganizationDomain("uyuni.de");
     QCoreApplication::setApplicationName("VideoConverter");
@@ -45,70 +119,54 @@ VideoWidget::VideoWidget(QWidget *parent)
     bar->addMenu(menu);
     QActionGroup *resGroup = new QActionGroup(this);
     resGroup->setExclusive(true);
-    QAction *act1024 = menu->addAction("1024 × 1024");
+    QAction *act1024 = menu->addAction("1024 × 1024", this, [this]{ m_resolution = 1024; });
     act1024->setCheckable(true);
     act1024->setChecked(true);
     resGroup->addAction(act1024);
-    connect(act1024, &QAction::triggered, this, [this]{ m_resolution = 1024; });
-    QAction *act2048 = menu->addAction("2048 × 2048");
+    QAction *act2048 = menu->addAction("2048 × 2048", this, [this]{ m_resolution = 2048; });
     act2048->setCheckable(true);
     resGroup->addAction(act2048);
-    connect(act2048, &QAction::triggered, this, [this]{ m_resolution = 2048; });
 
     QMenu *menuOpen = new QMenu("Öffnen", bar);
     bar->addMenu(menuOpen);
-    QAction *actOpen = menuOpen->addAction("Datei öffnen …");
+    QAction *actOpen = menuOpen->addAction("Datei öffnen …", this, &VideoWidget::openFile);
     actOpen->setShortcut(QKeySequence::Open);
     menuOpen->addSeparator();
-    m_recentMenu = menuOpen->addMenu("Zuletzt geöffnet");
-    connect(actOpen, &QAction::triggered, this, &VideoWidget::openFile);
+    m_recentMenu   = menuOpen->addMenu("Zuletzt geöffnet");
+    m_exportedMenu = menuOpen->addMenu("Zuletzt exportiert");
     rebuildRecentMenu();
+    rebuildExportedMenu();
 
     QMenu *menuSave = new QMenu("Speichern", bar);
     bar->addMenu(menuSave);
-    QAction *actSaveGrid    = menuSave->addAction("Sprite-Sheet …");
-    QAction *actExportVideo = menuSave->addAction("Video exportieren … (MP4 / GIF / PNG-Sequenz)");
+    menuSave->addAction("Sprite-Sheet …",                            this, &VideoWidget::saveSpriteSheet);
+    menuSave->addAction("Video exportieren … (MP4 / GIF / PNG-Sequenz)", this, &VideoWidget::exportVideo);
     menuSave->addSeparator();
     QMenu *menuOpenWith = menuSave->addMenu("Öffnen mit …");
-    QAction *actOpenExplorer  = menuOpenWith->addAction("Explorer");
-    QAction *actOpenXnView    = menuOpenWith->addAction("XnView");
-    QAction *actOpenFastStone = menuOpenWith->addAction("FastStone");
-    connect(actSaveGrid,       &QAction::triggered, this, &VideoWidget::saveSpriteSheet);
-    connect(actExportVideo,    &QAction::triggered, this, &VideoWidget::exportVideo);
-    connect(actOpenExplorer,   &QAction::triggered, this, &VideoWidget::openWithExplorer);
-    connect(actOpenXnView,     &QAction::triggered, this, &VideoWidget::openWithXnView);
-    connect(actOpenFastStone,  &QAction::triggered, this, &VideoWidget::openWithFastStone);
+    menuOpenWith->addAction("Explorer",  this, &VideoWidget::openWithExplorer);
+    menuOpenWith->addAction("XnView",    this, &VideoWidget::openWithXnView);
+    menuOpenWith->addAction("FastStone", this, &VideoWidget::openWithFastStone);
 
     QMenu *menuEdit = new QMenu("Bearbeiten", bar);
     bar->addMenu(menuEdit);
-    QAction *actPause = menuEdit->addAction("Pause / Weiter  [Space]");
-    connect(actPause, &QAction::triggered, this, &VideoWidget::togglePause);
+    menuEdit->addAction("Pause / Weiter  [Space]", this, &VideoWidget::togglePause);
 
     QMenu *menuFx = new QMenu("Effekte", bar);
     bar->addMenu(menuFx);
 
-    // Model selection submenu
     QMenu *menuModel = menuFx->addMenu("BiRefNet Modell");
     m_modelGroup = new QActionGroup(this);
     m_modelGroup->setExclusive(true);
-    const QStringList models =
-    {
-        "ZhengPeng7/BiRefNet",
-        "ZhengPeng7/BiRefNet_HR",
-        "ZhengPeng7/BiRefNet-portrait"
-    };
-    for (const QString &m : models)
+    for (const QString &m : { "ZhengPeng7/BiRefNet", "ZhengPeng7/BiRefNet_HR", "ZhengPeng7/BiRefNet-portrait" })
     {
         QAction *a = menuModel->addAction(m);
         a->setCheckable(true);
-        a->setChecked(m == "ZhengPeng7/BiRefNet");
+        a->setChecked(m == QLatin1String("ZhengPeng7/BiRefNet"));
         m_modelGroup->addAction(a);
     }
 
     menuFx->addSeparator();
-    m_actBgRemove = menuFx->addAction("Hintergrund entfernen (ComfyUI)");
-    m_actBgRemove->setEnabled(false);
-    connect(m_actBgRemove, &QAction::triggered, this, [this]
+    m_actBgRemove = menuFx->addAction("Hintergrund entfernen (ComfyUI)", this, [this]
     {
         if (m_bgRemover)
         {
@@ -123,6 +181,7 @@ VideoWidget::VideoWidget(QWidget *parent)
             startBgRemoval();
         }
     });
+    m_actBgRemove->setEnabled(false);
 
     // ── Layout ──
     resize(1000, 680);
@@ -337,7 +396,6 @@ void VideoWidget::playTick()
 QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
 {
     const int N = qMax(1, frameCount / step);
-    // const double cropAspect = getCropAspect();
     const auto [cols, rows] = findOptimalGrid(N);
     m_gridCols = cols;
     m_gridRows = rows;
@@ -510,14 +568,16 @@ void VideoWidget::dragEnterEvent(QDragEnterEvent *event)
 void VideoWidget::dropEvent(QDropEvent *event)
 {
     const auto urls = event->mimeData()->urls();
-    if (!urls.isEmpty())
-        doDropEvent(urls.first().toLocalFile());
+    if (urls.isEmpty()) return;
+    const QUrl url = urls.first();
+    const QString path = url.isLocalFile() ? url.toLocalFile() : url.toString();
+    doDropEvent(path);
 }
 
-void VideoWidget::doDropEvent(const QString &path)
+void VideoWidget::doDropEvent(QString path)
 {
     if (path.isEmpty()) return;
-
+    m_label->setDefaults();
     m_previewTimer.stop();
     m_playTimer.stop();
     if (m_extractor) { m_extractor->cancel(); m_extractor->deleteLater(); m_extractor = nullptr; }
@@ -543,9 +603,52 @@ void VideoWidget::doDropEvent(const QString &path)
     setWindowTitle("VideoConverter — extrahiere Frames …");
 
     static const QStringList imageExts = {"png","jpg","jpeg","bmp","tif","tiff","webp"};
+    const bool isUrl = path.startsWith("http://",Qt::CaseInsensitive) || path.startsWith("https://",Qt::CaseInsensitive);
     const QString ext = QFileInfo(path).suffix().toLower();
 
-    if (imageExts.contains(ext))
+    auto match = QRegularExpression("^(.*)([0-9a-fA-F]{24})$").match(path);
+    if(match.hasMatch())
+    {   // mp4 aus html extrahieren
+        // const QString path = match.captured(1);
+        const QString hash = match.captured(2);
+
+        static const QString googleApp("C:/Program Files/Google/Chrome/Application/chrome.exe");
+        QProcess chrome;
+        QFile::remove("d:/debug.html");
+        chrome.setStandardOutputFile("d:/debug.html");
+        chrome.start(googleApp, {
+                                     "--headless=new",
+                                     "--user-data-dir=" + chromeSettings,
+                                     "--dump-dom",
+                                     path
+                                 });
+        chrome.waitForFinished(15000);
+
+        QFile xmlFile("d:/debug.html");
+        if(xmlFile.open(QIODevice::ReadOnly))
+        {
+            QTextStream in(&xmlFile);
+            QString lastLine;
+            while(!in.atEnd())
+            {
+                QString nextLine=in.read(1000);
+                QString line=lastLine+nextLine;
+                int pos=line.indexOf("videoUrl");
+                if((pos>=0) && (pos<1000))
+                {
+                    pos=line.indexOf("https",pos);
+                    int pos2=line.indexOf(".mp4", pos);
+                    if(pos2>=0)
+                    {
+                        path = line.mid(pos,pos2+4-pos);
+                    }
+                }
+                lastLine=nextLine;
+            }
+            xmlFile.close();
+        }
+    }
+    if (!isUrl && imageExts.contains(ext))
     {
         // Einzelbild → sofort laden
         const QPixmap px(path);
@@ -639,8 +742,12 @@ void VideoWidget::startBgRemoval()
     const int step  = m_sortSlider->value();
     QMap<int, QPixmap> toProcess;
     for (int i = first; i <= last; i += step)
+    {
         if (m_bigMap.contains(i))
+        {
             toProcess[i] = m_bigMap[i];
+        }
+    }
     if (toProcess.isEmpty()) return;
 
     m_actBgRemove->setText("Abbrechen");
@@ -752,6 +859,7 @@ void VideoWidget::exportVideo()
     {
         setWindowTitle("VideoConverter");
         QSettings().setValue("save/dir", QFileInfo(out).absolutePath());
+        addToExported(out);
         exporter->deleteLater();
         QMessageBox::information(this, "Export fertig", "Gespeichert:\n" + out);
     });
@@ -810,9 +918,7 @@ void VideoWidget::saveSpriteSheet()
 
 void VideoWidget::openFile()
 {
-    const QStringList hist = QSettings().value("history/files").toStringList();
-    const QString startDir = hist.isEmpty()
-        ? QString() : QFileInfo(hist.first()).absolutePath();
+    const QString startDir = QSettings().value("open/lastDir").toString();
 
     const QString path = QFileDialog::getOpenFileName(
         this, "Datei öffnen", startDir,
@@ -828,12 +934,45 @@ void VideoWidget::addToHistory(const QString &path)
 {
     QSettings s;
     s.setValue("video", path);
+    s.setValue("open/lastDir", QFileInfo(path).absolutePath());
     QStringList hist = s.value("history/files").toStringList();
     hist.removeAll(path);
     hist.prepend(path);
     if (hist.size() > 20) hist.resize(20);
     s.setValue("history/files", hist);
     rebuildRecentMenu();
+}
+
+void VideoWidget::addToExported(const QString &path)
+{
+    QSettings s;
+    QStringList list = s.value("exports/files").toStringList();
+    list.removeAll(path);
+    list.prepend(path);
+    if (list.size() > 10) list.resize(10);
+    s.setValue("exports/files", list);
+    rebuildExportedMenu();
+}
+
+void VideoWidget::rebuildExportedMenu()
+{
+    m_exportedMenu->clear();
+    const QStringList list = QSettings().value("exports/files").toStringList();
+    if (list.isEmpty())
+    {
+        QAction *empty = m_exportedMenu->addAction("(leer)");
+        empty->setEnabled(false);
+        return;
+    }
+    for (const QString &f : list)
+    {
+        m_exportedMenu->addAction(
+                          QString("%1\t%2").arg(QFileInfo(f).absolutePath(), QFileInfo(f).fileName()),
+                          this,
+                          [this, f]{
+                              doDropEvent(f);
+                          })->setEnabled(QFileInfo::exists(f));
+    }
 }
 
 void VideoWidget::rebuildRecentMenu()
@@ -848,9 +987,11 @@ void VideoWidget::rebuildRecentMenu()
     }
     for (const QString &f : hist)
     {
-        QAction *a = m_recentMenu->addAction(
-            QString("%1  —  %2").arg(QFileInfo(f).fileName(), QFileInfo(f).absolutePath()));
-        connect(a, &QAction::triggered, this, [this, f]{ doDropEvent(f); });
+        m_recentMenu->addAction(
+            QString("%1\t%2").arg(QUrl(f).toString(QUrl::RemoveFilename),QFileInfo(f).fileName()),
+            this,[this, f]{
+                doDropEvent(f);
+            });
     }
 }
 

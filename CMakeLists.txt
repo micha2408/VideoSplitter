@@ -34,3 +34,18 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Widgets
     Qt6::Network
 )
+
+if(WIN32)
+    set(MYBIN_DIR "C:/Program Files/mybin")
+else()
+    set(MYBIN_DIR "$ENV{HOME}/bin/mybin")
+endif()
+
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    DEBUG_POSTFIX "_dbg"
+    RUNTIME_OUTPUT_DIRECTORY                "${MYBIN_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG          "${MYBIN_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${MYBIN_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${MYBIN_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL     "${MYBIN_DIR}"
+)

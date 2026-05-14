@@ -11,11 +11,14 @@ void Label::mousePressEvent(QMouseEvent *ev)
     if (ev->modifiers() & Qt::ControlModifier)
     {
         m_cropState = CropState::Preview;
+        m_didDrag   = false;
         update();
+        emit cropChanged();
         return;
     }
     if (!rubberBand)
         rubberBand = new QRubberBand(QRubberBand::Rectangle, this);
+    m_cropState     = CropState::None;
     m_imageCropRect = QRect();
     rubberBand->setGeometry(QRect(origin, QSize()));
     rubberBand->show();
@@ -29,12 +32,17 @@ void Label::mouseMoveEvent(QMouseEvent *ev)
         m_cropState = CropState::Preview;
     if (m_cropState != CropState::None)
     {
-        m_cropState = CropState::Preview;
-        if (m_newSel.isValid() && m_newSel.contains(ev->pos()))
+        if (m_didDrag || (m_newSel.isValid() && m_newSel.contains(ev->pos())))
         {
             m_newSel.adjust(-deltaPos.x(), -deltaPos.y(), -deltaPos.x(), -deltaPos.y());
             m_cropState = CropState::Dragging;
+            m_didDrag   = true;
         }
+        else
+        {
+            m_cropState = CropState::Preview;
+        }
+        update();
         return;
     }
     if (rubberBand)
@@ -58,6 +66,14 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
     if (m_cropState != CropState::None)
     {
         m_cropState = CropState::None;
+        if (!m_didDrag)
+        {
+            m_imageCropRect = QRect();
+            m_newSel        = QRect();
+            update();
+            emit cropChanged();
+            return;
+        }
     }
     else
     {
@@ -68,6 +84,8 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
         {
             m_imageCropRect = QRect();
             m_newSel        = QRect();
+            update();
+            emit cropChanged();
             return;
         }
     }
@@ -88,6 +106,7 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
         ).intersected(imagePlus.image.rect());
     }
     update();
+    emit cropChanged();
 }
 
 const QPixmap &Label::scale(int &x, int &y)

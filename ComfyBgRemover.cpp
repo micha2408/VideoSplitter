@@ -16,11 +16,12 @@ ComfyBgRemover::ComfyBgRemover(const QString &host, QObject *parent)
     connect(&m_pollTimer, &QTimer::timeout, this, &ComfyBgRemover::pollHistory);
 }
 
-void ComfyBgRemover::process(const QMap<int, QPixmap> &frames, const QString &model)
+void ComfyBgRemover::process(const QMap<int, QPixmap> &frames, const QString &model, const QString &nodeType)
 {
     if (frames.isEmpty()) return;
     m_frames    = frames;
     m_model     = model;
+    m_nodeType  = nodeType;
     m_queue     = frames.keys();
     m_doneCount = 0;
     m_cancelled = false;
@@ -104,7 +105,6 @@ void ComfyBgRemover::uploadFrame()
 
 void ComfyBgRemover::submitWorkflow(const QString &uploadedFilename)
 {
-    // Minimal workflow: LoadImage → BiRefNet_Hugo → SaveImage
     QJsonObject loadImage;
     loadImage["class_type"] = "LoadImage";
     loadImage["inputs"] = QJsonObject{
@@ -113,14 +113,29 @@ void ComfyBgRemover::submitWorkflow(const QString &uploadedFilename)
     };
 
     QJsonObject birefnet;
-    birefnet["class_type"] = "BiRefNet_Hugo";
-    birefnet["inputs"] = QJsonObject{
-        {"image",                QJsonArray{"1", 0}},
-        {"model",                m_model},
-        {"load_local_model",     false},
-        {"background_color_name","transparency"},
-        {"device",               "auto"}
-    };
+    birefnet["class_type"] = m_nodeType;
+    if (m_nodeType == "BiRefNetRMBG")
+    {
+        birefnet["inputs"] = QJsonObject{
+            {"image",             QJsonArray{"1", 0}},
+            {"model",             m_model},
+            {"mask_blur",         0},
+            {"mask_offset",       0},
+            {"invert_output",     false},
+            {"refine_foreground", true},
+            {"background",        "Alpha"}
+        };
+    }
+    else
+    {
+        birefnet["inputs"] = QJsonObject{
+            {"image",                QJsonArray{"1", 0}},
+            {"model",                m_model},
+            {"load_local_model",     false},
+            {"background_color_name","transparency"},
+            {"device",               "auto"}
+        };
+    }
 
     QJsonObject saveImage;
     saveImage["class_type"] = "SaveImage";

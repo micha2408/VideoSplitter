@@ -154,16 +154,53 @@ VideoWidget::VideoWidget(QWidget *parent)
     QMenu *menuFx = new QMenu("Effekte", bar);
     bar->addMenu(menuFx);
 
+    QMenu *menuNode = menuFx->addMenu("ComfyUI Node");
+    m_nodeGroup = new QActionGroup(this);
+    m_nodeGroup->setExclusive(true);
+    for (const QString &n : { "BiRefNet_Hugo", "BiRefNetRMBG" })
+    {
+        QAction *a = menuNode->addAction(n);
+        a->setCheckable(true);
+        a->setChecked(n == QLatin1String("BiRefNetRMBG"));
+        m_nodeGroup->addAction(a);
+    }
+
     QMenu *menuModel = menuFx->addMenu("BiRefNet Modell");
     m_modelGroup = new QActionGroup(this);
     m_modelGroup->setExclusive(true);
-    for (const QString &m : { "ZhengPeng7/BiRefNet", "ZhengPeng7/BiRefNet_HR", "ZhengPeng7/BiRefNet-portrait" })
+
+    auto rebuildModelMenu = [this, menuModel]()
     {
-        QAction *a = menuModel->addAction(m);
-        a->setCheckable(true);
-        a->setChecked(m == QLatin1String("ZhengPeng7/BiRefNet"));
-        m_modelGroup->addAction(a);
-    }
+        for (QAction *a : m_modelGroup->actions())
+        {
+            menuModel->removeAction(a);
+            m_modelGroup->removeAction(a);
+            delete a;
+        }
+        const bool isRMBG = m_nodeGroup->checkedAction() &&
+                            m_nodeGroup->checkedAction()->text() == "BiRefNetRMBG";
+        const QStringList models = isRMBG
+            ? QStringList{ "BiRefNet-general", "BiRefNet_512x512", "BiRefNet-HR",
+                           "BiRefNet-portrait", "BiRefNet-matting", "BiRefNet-HR-matting",
+                           "BiRefNet_lite", "BiRefNet_lite-2K", "BiRefNet_dynamic",
+                           "BiRefNet_lite-matting", "BiRefNet_toonout" }
+            : QStringList{ "ZhengPeng7/BiRefNet", "ZhengPeng7/BiRefNet_HR",
+                           "ZhengPeng7/BiRefNet-portrait" };
+        for (const QString &m : models)
+        {
+            QAction *a = menuModel->addAction(m);
+            a->setCheckable(true);
+            m_modelGroup->addAction(a);
+        }
+        if (!m_modelGroup->actions().isEmpty())
+            m_modelGroup->actions().first()->setChecked(true);
+    };
+    rebuildModelMenu();
+
+    connect(m_nodeGroup, &QActionGroup::triggered, this, [rebuildModelMenu](QAction *)
+    {
+        rebuildModelMenu();
+    });
 
     menuFx->addSeparator();
     m_actBgRemove = menuFx->addAction("Hintergrund entfernen (ComfyUI)", this, [this]
@@ -248,6 +285,11 @@ VideoWidget::VideoWidget(QWidget *parent)
 
     // Connections
     connect(m_label, &Label::rightClicked, this, &VideoWidget::toggleView);
+    connect(m_label, &Label::cropChanged,  this, [this]
+    {
+        if (m_paused || m_playTimer.isActive() == false)
+            showFrame(m_playIndex);
+    });
     connect(&m_previewTimer, &QTimer::timeout, this, &VideoWidget::previewTick);
     connect(&m_playTimer,    &QTimer::timeout, this, &VideoWidget::playTick);
     connect(m_rangeSlider, &RangeSlider::lowerValueChanged, this, &VideoWidget::lowerValueChanged);
@@ -765,9 +807,11 @@ void VideoWidget::startBgRemoval()
         m_bgRemover = nullptr;
     });
 
-    const QAction *checked = m_modelGroup->checkedAction();
-    const QString model = checked ? checked->text() : "ZhengPeng7/BiRefNet";
-    m_bgRemover->process(toProcess, model);
+    const QAction *checkedModel = m_modelGroup->checkedAction();
+    const QString model = checkedModel ? checkedModel->text() : "ZhengPeng7/BiRefNet";
+    const QAction *checkedNode = m_nodeGroup->checkedAction();
+    const QString nodeType = checkedNode ? checkedNode->text() : "BiRefNet_Hugo";
+    m_bgRemover->process(toProcess, model, nodeType);
 }
 
 void VideoWidget::onBgFrameReady(int index, QPixmap result)

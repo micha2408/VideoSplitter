@@ -76,6 +76,7 @@ private:
     ComfyBgRemover *m_bgRemover    = nullptr;
     QAction        *m_actBgRemove  = nullptr;
     QActionGroup   *m_modelGroup   = nullptr;
+    QActionGroup   *m_nodeGroup    = nullptr;
 
     // Frame extraction
     FrameExtractor *m_extractor = nullptr;

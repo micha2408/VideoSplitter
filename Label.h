@@ -65,9 +65,11 @@ private:
     QRect m_imageCropRect;
     QRect m_newSel;
     QPointF m_lastPos;
+    bool m_didDrag = false;
 signals:
     void sendPic(Label *l);
     void rightClicked();
+    void cropChanged();
 };
 
 

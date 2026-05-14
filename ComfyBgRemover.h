@@ -13,7 +13,8 @@ public:
                             QObject *parent = nullptr);
 
     void process(const QMap<int, QPixmap> &frames,
-                 const QString &model = "BiRefNet-general");
+                 const QString &model    = "BiRefNet-general",
+                 const QString &nodeType = "BiRefNet_Hugo");
     void cancel();
 
 signals:
@@ -33,6 +34,7 @@ private:
 
     QString                m_host;
     QString                m_model;
+    QString                m_nodeType;
     QNetworkAccessManager  m_net;
     QTimer                 m_pollTimer;
 

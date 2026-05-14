@@ -12,6 +12,7 @@ void Label::mousePressEvent(QMouseEvent *ev)
     {
         m_cropState = CropState::Preview;
         m_didDrag   = false;
+        QApplication::setOverrideCursor(Qt::BlankCursor);
         update();
         emit cropChanged();
         return;
@@ -32,9 +33,16 @@ void Label::mouseMoveEvent(QMouseEvent *ev)
         m_cropState = CropState::Preview;
     if (m_cropState != CropState::None)
     {
-        if (m_didDrag || (m_newSel.isValid() && m_newSel.contains(ev->pos())))
+        if (m_newSel.isValid())
         {
             m_newSel.adjust(-deltaPos.x(), -deltaPos.y(), -deltaPos.x(), -deltaPos.y());
+            int ox, oy;
+            const QPixmap &sc = scale(ox, oy);
+            const QRect bounds(ox, oy, sc.width(), sc.height());
+            if (m_newSel.left()   < bounds.left())   m_newSel.moveLeft(bounds.left());
+            if (m_newSel.top()    < bounds.top())    m_newSel.moveTop(bounds.top());
+            if (m_newSel.right()  > bounds.right())  m_newSel.moveRight(bounds.right());
+            if (m_newSel.bottom() > bounds.bottom()) m_newSel.moveBottom(bounds.bottom());
             m_cropState = CropState::Dragging;
             m_didDrag   = true;
         }
@@ -66,6 +74,7 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
     if (m_cropState != CropState::None)
     {
         m_cropState = CropState::None;
+        QApplication::restoreOverrideCursor();
         if (!m_didDrag)
         {
             m_imageCropRect = QRect();

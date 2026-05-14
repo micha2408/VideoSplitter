@@ -8,7 +8,10 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 qt_standard_project_setup()
 
-qt_add_executable(${PROJECT_NAME}
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(WIN32_FLAG WIN32)
+endif()
+qt_add_executable(${PROJECT_NAME} ${WIN32_FLAG}
     main.cpp
     VideoWidget.cpp
     VideoWidget.h

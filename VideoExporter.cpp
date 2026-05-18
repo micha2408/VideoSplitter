@@ -97,10 +97,6 @@ QStringList VideoExporter::buildArgs(const Options &opts, const QString &inputPa
              << "-loop" << "0";            // loop forever
         break;
 
-    case PNG_Sequence:
-        args << "-c:v" << "png";
-        // output path will be a pattern like out_%04d.png
-        break;
     }
 
     args << opts.outputPath;

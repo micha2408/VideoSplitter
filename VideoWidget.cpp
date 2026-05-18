@@ -31,83 +31,12 @@
 
 // ─── Constructor ────────────────────────────────────────────────────────────
 
-/**
- * Kopiert ein Verzeichnis rekursiv inkl. aller Unterordner und Dateien.
- *
- * @param sourceDir   Quellverzeichnis (muss existieren)
- * @param targetDir   Zielverzeichnis (wird angelegt, falls nicht vorhanden)
- * @param overwrite   true = bestehende Zieldateien überschreiben,
- *                    false = vorhandene Dateien überspringen
- * @return true bei Erfolg, false wenn mindestens ein Fehler auftrat
- */
-bool VideoWidget::copyDirectoryRecursive(const QString &sourceDir,
-                                         const QString &targetDir,
-                                         bool overwrite)
-{
-    QDir source(sourceDir);
-    if (!source.exists()) {
-        qWarning() << "Quellverzeichnis existiert nicht:" << sourceDir;
-        return false;
-    }
-
-    QDir target(targetDir);
-    if (!target.exists() && !QDir().mkpath(targetDir)) {
-        qWarning() << "Zielverzeichnis konnte nicht angelegt werden:" << targetDir;
-        return false;
-    }
-
-    bool success = true;
-
-    // Unterverzeichnisse rekursiv abarbeiten
-    const QFileInfoList dirs = source.entryInfoList(
-        QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
-    for (const QFileInfo &dirInfo : dirs) {
-        const QString srcPath = dirInfo.absoluteFilePath();
-        const QString dstPath = target.absoluteFilePath(dirInfo.fileName());
-        if (!copyDirectoryRecursive(srcPath, dstPath, overwrite))
-            success = false;
-    }
-
-    // Dateien kopieren
-    const QFileInfoList files = source.entryInfoList(
-        QDir::Files | QDir::NoSymLinks);
-    for (const QFileInfo &fileInfo : files) {
-        const QString srcPath = fileInfo.absoluteFilePath();
-        const QString dstPath = target.absoluteFilePath(fileInfo.fileName());
-
-        if (QFile::exists(dstPath)) {
-            if (!overwrite) {
-                qDebug() << "Übersprungen (existiert bereits):" << dstPath;
-                continue;
-            }
-            if (!QFile::remove(dstPath)) {
-                qWarning() << "Konnte Zieldatei nicht überschreiben:" << dstPath;
-                success = false;
-                continue;
-            }
-        }
-
-        if (!QFile::copy(srcPath, dstPath)) {
-            qWarning() << "Kopie fehlgeschlagen:" << srcPath << "->" << dstPath;
-            success = false;
-        }
-    }
-
-    return success;
-}
-
 VideoWidget::VideoWidget(QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowTitle("VideoConverter");
     chromeSettings = "C:\\Users\\micha\\AppData\\Local\\Google\\Chrome\\User Data\\Default2";
-    // bool ok = copyDirectoryRecursive(
-    //     "C:\\Users\\micha\\AppData\\Local\\Google\\Chrome\\User Data\\Default",
-    //     chromeSettings,
-    //     false);
-
     // if (!ok) qWarning() << "Mindestens eine Datei konnte nicht kopiert werden.";
-
     QCoreApplication::setOrganizationName("michaelSW");
     QCoreApplication::setOrganizationDomain("uyuni.de");
     QCoreApplication::setApplicationName("VideoConverter");
@@ -139,8 +68,11 @@ VideoWidget::VideoWidget(QWidget *parent)
 
     QMenu *menuSave = new QMenu("Speichern", bar);
     bar->addMenu(menuSave);
-    menuSave->addAction("Sprite-Sheet …",                            this, &VideoWidget::saveSpriteSheet);
-    menuSave->addAction("Video exportieren … (MP4 / GIF / PNG-Sequenz)", this, &VideoWidget::exportVideo);
+    menuSave->addAction("Video exportieren WEBM", this, &VideoWidget::exportVideo)->setData("(*.webM)");
+    menuSave->addAction("Video exportieren MP4", this, &VideoWidget::exportVideo)->setData("(*.mp4)");
+    menuSave->addAction("Video exportieren GIF", this, &VideoWidget::exportVideo)->setData("(*.gif)");
+    menuSave->addAction("Video exportieren PNG/LSL", this, &VideoWidget::exportVideo)->setData("(*.png)");
+    menuSave->addAction("Alles exportieren ", this, &VideoWidget::exportAll);
     menuSave->addSeparator();
     QMenu *menuOpenWith = menuSave->addMenu("Öffnen mit …");
     menuOpenWith->addAction("Explorer",  this, &VideoWidget::openWithExplorer);
@@ -716,7 +648,7 @@ void VideoWidget::doDropEvent(QString path)
         });
         m_extractor->extract(path);
     }
-
+    currentBaseName = QFileInfo(path).baseName();
     addToHistory(path);
 }
 
@@ -851,35 +783,115 @@ void VideoWidget::onBgFinished()
 
 // ─── Speichern ────────────────────────────────────────────────────────────────
 
+void VideoWidget::exportAll()
+{
+    if (m_bigMap.isEmpty()) return;
+    QSettings s;
+    nochmal:
+    QString selected;
+    QString path = QFileDialog::getSaveFileName(
+        this, "Video exportieren",
+        s.value("save/dir").toString()+ "/"+currentBaseName,
+        "video/gif/texture (*.mp4 *.gif *.png);;"
+        "Ordner ("")",
+        &selected,
+        QFileDialog::DontConfirmOverwrite);
+    if (path.isEmpty()) return;
+    QString nr("");
+    QStringList files;
+    QStringList mask;
+    #define isDir QFileInfo(path).isDir()
+    #define isDirEmpty QDir(path).isEmpty()
+    if(selected.startsWith("Ordner"))
+    {
+        mask = {path + "/" + "video%1.mp4", path + "/" + "video%1.gif", path + "/" + "texture%1.png" };
+        if(not isDir)
+        {
+            QDir().mkpath(path); // Ordner erstellen, falls er nicht existiert
+        }
+    } else
+    {
+        path.remove(QRegularExpression("(_\\d+)?\\.mp4|(_\\d+)?\\.gif|(_\\d+)?\\.png",QRegularExpression::CaseInsensitiveOption)); // erweitrung entfernen
+        mask = {path + "%1.mp4", path + "%1.gif", path + "%1.png" };
+    }
+    for(QString &file : mask)
+    {   // doppelte namen identifizieren
+        while(QFileInfo(QString(file).arg(nr)).exists())
+        {
+            nr="_"+QString::number(nr.mid(1).toInt()+1);
+        }
+    }
+    for(QString &file : mask)
+    {   // filenamen generieren
+        files << QString(file).arg(nr);
+    }
+
+    switch(QMessageBox::question(this, "Exportiere alle Videos",
+                                                     QString("Es werden folgende Dateien erstellt:\n\n"
+                                                             "Video: %1\n"
+                                                             "GIF:   %2\n"
+                                                             "Sprite: %3\n\n"
+                                                             "OK zum Fortfahren, Abbrechen zum Abbrechen, retry fuer neuen Pfad")
+                                                         .arg(files[0],files[1],files[2]),
+                                                     QMessageBox::Ok | QMessageBox::Cancel | QMessageBox::Retry))
+    {
+        case QMessageBox::Ok:
+            break;
+        case QMessageBox::Retry:
+            if(isDir | isDirEmpty)
+            {
+                QDir(path).rmdir(path); // leeren Ordner entfernen, damit er bei erneutem Dialog wieder auswählbar ist
+            }
+            goto nochmal;
+        default:;
+            if(isDir | isDirEmpty)
+            {
+                QDir(path).rmdir(path); // leeren Ordner entfernen, damit er bei erneutem Dialog wieder auswählbar ist
+            }
+            return;
+    }
+    saveVideo(files[0]);
+    saveVideo(files[1]);
+    saveSpriteSheet(files[2]);
+}
 void VideoWidget::exportVideo()
 {
     if (m_bigMap.isEmpty()) return;
-
-    // Format-Auswahl über Datei-Filter
-    const QString filter =
-        "MP4 Video H.264 — kein Alpha (*.mp4);;"
-        "Animiertes GIF — binäres Alpha (*.gif);;"
-        "PNG-Sequenz — volles Alpha, für Weiterverarbeitung (*.png)";
-
+    QAction *senderAct = qobject_cast<QAction*>(sender());
     QSettings s;
     const QString path = QFileDialog::getSaveFileName(
         this, "Video exportieren",
-        s.value("save/dir").toString(),
-        filter);
+        s.value("save/dir").toString()+"/"+currentBaseName,
+        "Video " + senderAct->data().toString());
     if (path.isEmpty()) return;
+    if (path.endsWith(".png", Qt::CaseInsensitive))
+    {
+        // PNG export → sprite sheet + LSL
+        saveSpriteSheet(path);
+        return;
+    }
+    saveVideo(path);
+}
 
+void VideoWidget::saveVideo(const QString &path)
+{
     VideoExporter::Options opts;
     opts.fps        = m_delay > 0 ? 1000.0 / m_delay : 25.0;
     opts.outputPath = path;
-
     if (path.endsWith(".mp4", Qt::CaseInsensitive))      opts.format = VideoExporter::MP4;
     else if (path.endsWith(".gif", Qt::CaseInsensitive)) opts.format = VideoExporter::GIF;
-    else                                                  opts.format = VideoExporter::PNG_Sequence;
+    else if (path.endsWith(".webM", Qt::CaseInsensitive)) opts.format = VideoExporter::GIF;
+    else
+    {
+        QMessageBox::warning(this, "Export-Fehler", "Unbekanntes Format:\n" + path);
+        return;
+    }
 
     // Collect frames in slider range with step + crop applied
     const int first = m_rangeSlider->lowerValue();
     const int last  = m_rangeSlider->upperValue();
     const int step  = m_sortSlider->value();
+
     const QRect cropRect = m_label->cropRectInImageCoords();
 
     QMap<int, QPixmap> toExport;
@@ -917,34 +929,32 @@ void VideoWidget::exportVideo()
     exporter->exportFrames(toExport, opts);
 }
 
-void VideoWidget::saveSpriteSheet()
+void VideoWidget::saveSpriteSheet(const QString &path)
 {
-    if (m_bigMap.isEmpty()) return;
-
     const int first = m_rangeSlider->lowerValue();
     const int last  = m_rangeSlider->upperValue();
     const int step  = m_sortSlider->value();
+
     const int N     = qMax(1, (last - first + 1) / step);
     const auto [cols, rows] = findOptimalGrid(N);
     const double fps = m_delay > 0 ? 1000.0 / (m_delay * step) : 25.0;
 
-    QSettings s;
-    const QString defaultName = QString("%1/%2x%3_%4frames_%5fps.png")
-        .arg(s.value("save/dir").toString())
-        .arg(cols).arg(rows).arg(N)
-        .arg(fps, 0, 'f', 1);
-
-    const QString path = QFileDialog::getSaveFileName(
-        this, "Sprite-Sheet speichern", defaultName, "PNG (*.png);;All files (*)");
-    if (path.isEmpty()) return;
-
     const QPixmap grid = composeGrid(first, last - first + 1, step);
-    if (!grid.save(path, "PNG")) return;
-    s.setValue("save/dir", QFileInfo(path).absolutePath());
+    if (grid.save(path))
+    {
+        QSettings().setValue("save/dir", QFileInfo(path).absolutePath());
+        addToExported(path);
+        QMessageBox::information(this, "Export fertig", "Gespeichert:\n" + path);
+    }
+    else
+    {
+        QMessageBox::warning(this, "Export-Fehler", "Konnte nicht speichern:\n" + path);
+        return;
+    }
 
     // LSL-Script daneben ablegen
     const QString lslPath = QFileInfo(path).absolutePath() + "/"
-                          + QFileInfo(path).baseName() + ".lsl";
+                            + QFileInfo(path).baseName() + ".lsl";
     QFile lslFile(lslPath);
     if (lslFile.open(QIODevice::WriteOnly | QIODevice::Text))
     {

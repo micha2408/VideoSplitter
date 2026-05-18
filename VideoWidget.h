@@ -88,7 +88,7 @@ private:
     void addToExported(const QString &path);
     void rebuildRecentMenu();
     void rebuildExportedMenu();
-
+    QString currentBaseName;
     // Grid helpers
     struct GridDims { int cols, rows; };
     GridDims findOptimalGrid(int N) const;
@@ -112,8 +112,10 @@ private slots:
     void onBgProgress(int done, int total);
     void onBgFinished();
     void openFile();
-    void saveSpriteSheet();
+    void saveSpriteSheet(const QString &path);
+    void saveVideo(const QString &path);
     void exportVideo();
+    void exportAll();
     void openWithExplorer();
     void openWithXnView();
     void openWithFastStone();

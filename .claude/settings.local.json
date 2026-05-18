@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cmd /c \"dir d:\\\\Qt\\\\projekte\\\\implgui\\\\build /b /a\")",
+      "PowerShell(cmd /c \"dir d:\\\\Qt\\\\projekte\\\\implgui\\\\build\\\\Desktop_Qt_6_10_2_MSVC2022_64bit-Debug /b /a\")",
+      "PowerShell(cmd /c \"dir d:\\\\Qt\\\\git\\\\implgui /b /a\")",
+      "PowerShell(cmd /c \"dir d:\\\\Qt\\\\git\\\\implgui\\\\src /b /a\")",
+      "PowerShell(cmd /c \"dir d:\\\\Qt\\\\git\\\\implgui\\\\src\\\\build /b /a\")"
+    ]
+  }
+}

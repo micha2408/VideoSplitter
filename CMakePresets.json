@@ -1,0 +1,35 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "debug",
+            "displayName": "Debug",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/vscode-debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "Qt6_DIR": "C:/Qt/Qt6-static/6.10.2/llvm-mingw_64-debug/lib/cmake/Qt6"
+            }
+        },
+        {
+            "name": "release",
+            "displayName": "Release",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/vscode-release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "Qt6_DIR": "C:/Qt/Qt6-static/6.10.2/llvm-mingw_64-release/lib/cmake/Qt6"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "debug",
+            "configurePreset": "debug"
+        },
+        {
+            "name": "release",
+            "configurePreset": "release"
+        }
+    ]
+}

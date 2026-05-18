@@ -10,7 +10,7 @@ class VideoExporter : public QObject
 {
     Q_OBJECT
 public:
-    enum Format { MP4, WebM, GIF, PNG_Sequence };
+    enum Format { MP4, WebM, GIF };
 
     struct Options
     {

@@ -26,7 +26,7 @@ void FrameExtractor::extract(const QString &videoPath)
     QStringList probeArgs = {
         "-v", "quiet",
         "-select_streams", "v:0",
-        "-show_entries", "stream=r_frame_rate,nb_frames",
+        "-show_entries", "stream=avg_frame_rate,nb_frames",
         "-of", "csv=p=0",
         videoPath
     };

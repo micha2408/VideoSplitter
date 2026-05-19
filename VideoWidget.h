@@ -51,8 +51,10 @@ private:
     QLabel         *m_labelLower;
     QLabel         *m_labelUpper;
     QLabel         *m_labelSort;
+    QLabel         *m_labelSpeed;
     RangeSlider    *m_rangeSlider;
     QSlider        *m_sortSlider;
+    QSlider        *m_speedSlider;
     QString chromeSettings;
     // Grid preview animation
     QList<QPixmap> m_previewList;
@@ -104,6 +106,7 @@ private slots:
     void lowerValueChanged(int value);
     void upperValueChanged(int value);
     void sortValueChanged(int value);
+    void speedValueChanged(int value);
     void previewTick();
     void playTick();
     void togglePause();

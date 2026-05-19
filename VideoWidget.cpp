@@ -204,13 +204,22 @@ VideoWidget::VideoWidget(QWidget *parent)
     m_sortSlider->setMaximumWidth(80);
     m_sortSlider->setMinimum(1);
     m_sortSlider->setValue(1);
+    m_labelSpeed  = new QLabel("– ms", central);
+    m_speedSlider = new QSlider(Qt::Horizontal, central);
+    m_speedSlider->setMaximumWidth(80);
+    m_speedSlider->setRange(10, 200);
+    m_speedSlider->setValue(40);
+    m_speedSlider->setEnabled(false);
     m_rangeSlider->blockSignals(true);
     m_sortSlider->blockSignals(true);
+    m_speedSlider->blockSignals(true);
     ctrlLayout->addWidget(m_labelLower);
     ctrlLayout->addWidget(m_rangeSlider, 1);
     ctrlLayout->addWidget(m_labelUpper);
     ctrlLayout->addWidget(m_labelSort);
     ctrlLayout->addWidget(m_sortSlider);
+    ctrlLayout->addWidget(m_labelSpeed);
+    ctrlLayout->addWidget(m_speedSlider);
     mainLayout->addLayout(ctrlLayout);
 
     setCentralWidget(central);
@@ -222,11 +231,14 @@ VideoWidget::VideoWidget(QWidget *parent)
         if (m_paused || m_playTimer.isActive() == false)
             showFrame(m_playIndex);
     });
+    m_playTimer.setTimerType(Qt::PreciseTimer);
+    m_previewTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_previewTimer, &QTimer::timeout, this, &VideoWidget::previewTick);
     connect(&m_playTimer,    &QTimer::timeout, this, &VideoWidget::playTick);
     connect(m_rangeSlider, &RangeSlider::lowerValueChanged, this, &VideoWidget::lowerValueChanged);
     connect(m_rangeSlider, &RangeSlider::upperValueChanged, this, &VideoWidget::upperValueChanged);
     connect(m_sortSlider,  &QSlider::valueChanged,          this, &VideoWidget::sortValueChanged);
+    connect(m_speedSlider, &QSlider::valueChanged,          this, &VideoWidget::speedValueChanged);
 
     setAcceptDrops(true);
 
@@ -321,7 +333,7 @@ void VideoWidget::togglePause()
     {
         // Play startet immer vom unteren Griff
         m_playIndex = m_rangeSlider->lowerValue();
-        m_playTimer.start(qMax(16, m_delay * m_sortSlider->value()));
+        m_playTimer.start(qMax(1, m_delay * m_sortSlider->value()));
     }
     updateTitle();
 }
@@ -338,7 +350,7 @@ void VideoWidget::startPlayback()
 {
     m_playIndex = m_rangeSlider->lowerValue();
     if (!m_paused)
-        m_playTimer.start(qMax(16, m_delay * m_sortSlider->value()));
+        m_playTimer.start(qMax(1, m_delay * m_sortSlider->value()));
     updateTitle();
 }
 
@@ -435,7 +447,7 @@ void VideoWidget::paintGrid()
     {
         m_previewLabel->setPixmap(m_previewList[0].scaled(
             m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        const int interval = qMax(16, m_delay * step);
+        const int interval = qMax(1, m_delay * step);
         m_previewTimer.start(interval);
     }
 }
@@ -508,7 +520,18 @@ void VideoWidget::sortValueChanged(int value)
     if (m_showingGrid)
         paintGrid();
     else if (!m_fillingMap && !m_paused)
-        m_playTimer.start(qMax(16, m_delay * value));
+        m_playTimer.start(qMax(1, m_delay * value));
+    updateTitle();
+}
+
+void VideoWidget::speedValueChanged(int value)
+{
+    m_delay = value;
+    m_labelSpeed->setText(QString("%1 ms").arg(value));
+    if (m_showingGrid)
+        paintGrid();
+    else if (!m_fillingMap && !m_paused)
+        m_playTimer.start(qMax(1, m_delay * m_sortSlider->value()));
     updateTitle();
 }
 
@@ -541,11 +564,44 @@ void VideoWidget::dragEnterEvent(QDragEnterEvent *event)
 
 void VideoWidget::dropEvent(QDropEvent *event)
 {
-    const auto urls = event->mimeData()->urls();
-    if (urls.isEmpty()) return;
-    const QUrl url = urls.first();
-    const QString path = url.isLocalFile() ? url.toLocalFile() : url.toString();
-    doDropEvent(path);
+    auto &m=*event->mimeData();
+    if(m.hasUrls())
+    {
+        const QUrl url = m.urls().first();
+        if(url.isLocalFile())
+        {
+            doDropEvent(url.toLocalFile());
+            return;
+        }
+        const QString cleaned = url.toString(QUrl::RemoveQuery | QUrl::RemoveFragment);
+        QRegularExpression re(R"(\.(mp4|gif|webm|png|jpg|jpeg|bmp|tif|tiff|webp)$)",
+                              QRegularExpression::CaseInsensitiveOption);
+        if(re.match(cleaned).hasMatch())
+        {
+            doDropEvent(url.toString());
+            return;
+        }
+    }
+    if(m.hasHtml())
+    {
+        const QString html = m.html();
+        QRegularExpression re(R"(https://[^\s"'<>]+\.(?:mp4|gif|webm))",
+                              QRegularExpression::CaseInsensitiveOption);
+        auto match = re.match(html);
+        if(match.hasMatch())
+        {
+            doDropEvent(match.captured(0));
+        } else
+        {
+            QRegularExpression re(R"(https://[^\s"'<>]+\.(?:png|jpg|jpeg|bmp|tif|tiff|webp))",
+                              QRegularExpression::CaseInsensitiveOption);
+            auto match = re.match(html);
+            if(match.hasMatch())
+            {
+                doDropEvent(match.captured(0));
+            }
+        }
+    }
 }
 
 void VideoWidget::doDropEvent(QString path)
@@ -569,60 +625,20 @@ void VideoWidget::doDropEvent(QString path)
     m_stack->setCurrentIndex(0);
     m_rangeSlider->setEnabled(false);
     m_sortSlider->setEnabled(false);
+    m_speedSlider->setEnabled(false);
     m_rangeSlider->blockSignals(true);
     m_sortSlider->blockSignals(true);
+    m_speedSlider->blockSignals(true);
     m_labelLower->setText("–");
     m_labelUpper->setText("–");
     m_labelSort->setText("–");
+    m_labelSpeed->setText("– ms");
     setWindowTitle("VideoConverter — extrahiere Frames …");
 
     static const QStringList imageExts = {"png","jpg","jpeg","bmp","tif","tiff","webp"};
-    const bool isUrl = path.startsWith("http://",Qt::CaseInsensitive) || path.startsWith("https://",Qt::CaseInsensitive);
     const QString ext = QFileInfo(path).suffix().toLower();
 
-    auto match = QRegularExpression("^(.*)([0-9a-fA-F]{24})$").match(path);
-    if(match.hasMatch())
-    {   // mp4 aus html extrahieren
-        // const QString path = match.captured(1);
-        const QString hash = match.captured(2);
-
-        static const QString googleApp("C:/Program Files/Google/Chrome/Application/chrome.exe");
-        QProcess chrome;
-        QFile::remove("d:/debug.html");
-        chrome.setStandardOutputFile("d:/debug.html");
-        chrome.start(googleApp, {
-                                     "--headless=new",
-                                     "--user-data-dir=" + chromeSettings,
-                                     "--dump-dom",
-                                     path
-                                 });
-        chrome.waitForFinished(15000);
-
-        QFile xmlFile("d:/debug.html");
-        if(xmlFile.open(QIODevice::ReadOnly))
-        {
-            QTextStream in(&xmlFile);
-            QString lastLine;
-            while(!in.atEnd())
-            {
-                QString nextLine=in.read(1000);
-                QString line=lastLine+nextLine;
-                int pos=line.indexOf("videoUrl");
-                if((pos>=0) && (pos<1000))
-                {
-                    pos=line.indexOf("https",pos);
-                    int pos2=line.indexOf(".mp4", pos);
-                    if(pos2>=0)
-                    {
-                        path = line.mid(pos,pos2+4-pos);
-                    }
-                }
-                lastLine=nextLine;
-            }
-            xmlFile.close();
-        }
-    }
-    if (!isUrl && imageExts.contains(ext))
+    if (imageExts.contains(ext))
     {
         // Einzelbild → sofort laden
         const QPixmap px(path);
@@ -673,13 +689,19 @@ void VideoWidget::onFramesExtracted(QMap<int, QPixmap> frames, int delayMs)
     const int maxSort = qMax(1, count / 2);
     m_sortSlider->setRange(1, maxSort);
     m_sortSlider->setValue(1);
+    const int clampedDelay = qBound(m_speedSlider->minimum(), delayMs, m_speedSlider->maximum());
+    m_speedSlider->setValue(clampedDelay);
+    m_delay = clampedDelay;
     m_labelLower->setText("0");
     m_labelUpper->setText(QString::number(count - 1));
     m_labelSort->setText(QString("1/%1").arg(maxSort));
+    m_labelSpeed->setText(QString("%1 ms").arg(m_delay));
     m_rangeSlider->blockSignals(false);
     m_sortSlider->blockSignals(false);
+    m_speedSlider->blockSignals(false);
     m_rangeSlider->setEnabled(true);
     m_sortSlider->setEnabled(true);
+    m_speedSlider->setEnabled(true);
     m_fillingMap = false;
     m_actBgRemove->setEnabled(true);
 
@@ -875,8 +897,12 @@ void VideoWidget::exportVideo()
 
 void VideoWidget::saveVideo(const QString &path)
 {
+    const int first = m_rangeSlider->lowerValue();
+    const int last  = m_rangeSlider->upperValue();
+    const int step  = m_sortSlider->value();
+
     VideoExporter::Options opts;
-    opts.fps        = m_delay > 0 ? 1000.0 / m_delay : 25.0;
+    opts.fps        = (step > 0 && m_delay > 0) ? 1000.0 / (m_delay * step) : 25.0;
     opts.outputPath = path;
     if (path.endsWith(".mp4", Qt::CaseInsensitive))      opts.format = VideoExporter::MP4;
     else if (path.endsWith(".gif", Qt::CaseInsensitive)) opts.format = VideoExporter::GIF;
@@ -888,9 +914,6 @@ void VideoWidget::saveVideo(const QString &path)
     }
 
     // Collect frames in slider range with step + crop applied
-    const int first = m_rangeSlider->lowerValue();
-    const int last  = m_rangeSlider->upperValue();
-    const int step  = m_sortSlider->value();
 
     const QRect cropRect = m_label->cropRectInImageCoords();
 

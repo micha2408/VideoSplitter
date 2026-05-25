@@ -28,7 +28,7 @@
 #include <QProcess>
 #include <cmath>
 #include <QRegularExpression>
-
+#include <QFileDialog>
 // ─── Constructor ────────────────────────────────────────────────────────────
 
 VideoWidget::VideoWidget(QWidget *parent)
@@ -150,7 +150,11 @@ VideoWidget::VideoWidget(QWidget *parent)
             startBgRemoval();
         }
     });
-    m_actBgRemove->setEnabled(false);
+    menuFx->addSeparator();
+    menuFx->addAction("Hintergrund wiederherstellen", this, [this]
+                                      {
+                                        m_bigMap = m_bigMapBackup;
+                                      });
 
     // ── Layout ──
     resize(1000, 680);
@@ -386,8 +390,8 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
     m_gridCols = cols;
     m_gridRows = rows;
 
-    const int cellW = m_resolution / cols;
-    const int cellH = m_resolution / rows;
+    const qreal cellW = qreal(m_resolution) / qreal(cols);
+    const qreal cellH = qreal(m_resolution) / qreal(rows);
 
     QPixmap result(m_resolution, m_resolution);
     result.fill(Qt::transparent);
@@ -411,7 +415,7 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
 
         const int row = i / cols;
         const int col = i % cols;
-        const QRect cell(col * cellW, row * cellH, cellW, cellH);
+        const QRect cell(round(col * cellW), round(row * cellH), round(cellW), round(cellH));
 
         p.drawPixmap(cell, src.scaled(cell.size(),
                                       Qt::IgnoreAspectRatio,
@@ -665,6 +669,7 @@ void VideoWidget::doDropEvent(QString path)
         m_extractor->extract(path);
     }
     currentBaseName = QFileInfo(path).baseName();
+    currentPath = QFileInfo(path).absolutePath();
     addToHistory(path);
 }
 
@@ -680,6 +685,7 @@ void VideoWidget::onFramesExtracted(QMap<int, QPixmap> frames, int delayMs)
     }
 
     m_bigMap  = frames;
+    m_bigMapBackup = frames;
     m_delay   = delayMs;
     const int count = m_bigMap.size();
 
@@ -803,42 +809,79 @@ void VideoWidget::onBgFinished()
     }
 }
 
-// ─── Speichern ────────────────────────────────────────────────────────────────
-
 void VideoWidget::exportAll()
 {
     if (m_bigMap.isEmpty()) return;
     QSettings s;
     nochmal:
-    QString selected;
-    QString path = QFileDialog::getSaveFileName(
-        this, "Video exportieren",
-        s.value("save/dir").toString()+ "/"+currentBaseName,
-        "video/gif/texture (*.mp4 *.gif *.png);;"
-        "Ordner ("")",
-        &selected,
-        QFileDialog::DontConfirmOverwrite);
+    // QString selected;
+    QString path;
+
+        QStringList filters = {
+            "Ordner (*.)"/*, // spezieller Filter für Ordner-Auswahl
+            "video/gif/texture (*.mp4 *.gif *.png)"*/
+        };
+        // while(true)
+        // {
+        //     bool done=true; // wenn der Benutzer den speziellen Ordner-Filter auswählt, muss der Dialog mit dem neuen Filter neu geöffnet werden, damit der Ordner-Auswahlmodus aktiviert wird. In diesem Fall soll aber nicht direkt der aktuelle Filter übernommen werden, sondern immer der erste (Ord
+            QFileDialog dlg(this, "Video exportieren");
+            dlg.setAcceptMode(QFileDialog::AcceptSave);
+            dlg.setOption(QFileDialog::DontConfirmOverwrite);
+            dlg.setDefaultSuffix("");
+            // if(filters.first().startsWith("Ordner"))
+            // {
+                dlg.setDirectory(currentPath + "/" + currentBaseName);
+                dlg.selectFile("*.*");
+            // } else
+            // {
+            //     dlg.setDirectory(s.value("save/dir").toString());
+            //     dlg.selectFile(currentBaseName);
+            // }
+            dlg.setNameFilters(filters);
+            // connect(&dlg, &QFileDialog::filterSelected, this, [this, &dlg, &filters, &done](const QString &filter)
+            // {
+            //     qDebug() << dlg.selectedFiles();
+            //     if(int index=filters.indexOf(filter))
+            //     {
+            //         filters.swapItemsAt(0,index);
+            //         dlg.close(); // Filterwechsel → Dialog neu öffnen, damit der spezielle Ordner-Filter oben ist
+            //         done = false;
+            //     }
+            // });
+            if (dlg.exec() != QDialog::Accepted)
+            {
+                qDebug() << "Export abgebrochen" << dlg.result();
+                return;
+            }
+            // if(done)
+            // {
+                // selected = dlg.selectedNameFilter();
+                path = dlg.selectedFiles().value(0);
+            //     break;
+            // }
+        // }
+
     if (path.isEmpty()) return;
     QString nr("");
     QStringList files;
     QStringList mask;
     #define isDir QFileInfo(path).isDir()
     #define isDirEmpty QDir(path).isEmpty()
-    if(selected.startsWith("Ordner"))
+    // if(selected.startsWith("Ordner"))
+    // {
+    //     mask = {path + "/" + "video%1.mp4", path + "/" + "video%1.gif", path + "/" + "video%1.png" };
+    //     if(not isDir)
+    //     {
+    //         QDir().mkpath(path); // Ordner erstellen, falls er nicht existiert
+    //     }
+    // } else
     {
-        mask = {path + "/" + "video%1.mp4", path + "/" + "video%1.gif", path + "/" + "texture%1.png" };
-        if(not isDir)
-        {
-            QDir().mkpath(path); // Ordner erstellen, falls er nicht existiert
-        }
-    } else
-    {
-        path.remove(QRegularExpression("(_\\d+)?\\.mp4|(_\\d+)?\\.gif|(_\\d+)?\\.png",QRegularExpression::CaseInsensitiveOption)); // erweitrung entfernen
+        path.remove(QRegularExpression("(_\\d+)?\\.[^.\\\\/]+$")); // beliebige Extension (+ optionales _N) entfernen
         mask = {path + "%1.mp4", path + "%1.gif", path + "%1.png" };
     }
     for(QString &file : mask)
     {   // doppelte namen identifizieren
-        while(QFileInfo(QString(file).arg(nr)).exists())
+        while(QFileInfo::exists(QString(file).arg(nr)))
         {
             nr="_"+QString::number(nr.mid(1).toInt()+1);
         }

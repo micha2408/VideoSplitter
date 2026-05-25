@@ -11,6 +11,7 @@ qt_standard_project_setup()
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(WIN32_FLAG WIN32)
 endif()
+
 qt_add_executable(${PROJECT_NAME} ${WIN32_FLAG}
     main.cpp
     VideoWidget.cpp

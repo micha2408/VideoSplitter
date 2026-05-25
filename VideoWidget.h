@@ -10,7 +10,7 @@
 #include <QElapsedTimer>
 #include <QActionGroup>
 #include <QPixmap>
-
+#include <QFileDialog>
 class Label;
 class RangeSlider;
 class QStackedWidget;
@@ -37,9 +37,9 @@ private:
                                 const QString &targetDir,
                                 bool overwrite = false);
     void doDropEvent(QString path);
-
     // All captured frames (index → pixmap)
     QMap<int, QPixmap> m_bigMap;
+    QMap<int, QPixmap> m_bigMapBackup;
     int  m_delay      = 0;
     bool m_fillingMap = false;
 
@@ -91,6 +91,7 @@ private:
     void rebuildRecentMenu();
     void rebuildExportedMenu();
     QString currentBaseName;
+    QString currentPath;
     // Grid helpers
     struct GridDims { int cols, rows; };
     GridDims findOptimalGrid(int N) const;

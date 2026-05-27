@@ -11,6 +11,8 @@
 #include <QActionGroup>
 #include <QPixmap>
 #include <QFileDialog>
+#include <QSettings>
+
 class Label;
 class RangeSlider;
 class QStackedWidget;
@@ -36,7 +38,7 @@ private:
     bool copyDirectoryRecursive(const QString &sourceDir,
                                 const QString &targetDir,
                                 bool overwrite = false);
-    void doDropEvent(QString path);
+    void doDropEvent(const QString &path);
     // All captured frames (index → pixmap)
     QMap<int, QPixmap> m_bigMap;
     QMap<int, QPixmap> m_bigMapBackup;
@@ -55,13 +57,10 @@ private:
     RangeSlider    *m_rangeSlider;
     QSlider        *m_sortSlider;
     QSlider        *m_speedSlider;
-    QString chromeSettings;
     // Grid preview animation
     QList<QPixmap> m_previewList;
     QTimer         m_previewTimer;
     int            m_previewIndex = 0;
-    int            m_gridCols     = 1;
-    int            m_gridRows     = 1;
 
     // Playback
     QTimer       m_playTimer;
@@ -85,17 +84,31 @@ private:
 
     // File history
     QMenu   *m_recentMenu   = nullptr;
-    QMenu   *m_exportedMenu = nullptr;
     void addToHistory(const QString &path);
-    void addToExported(const QString &path);
     void rebuildRecentMenu();
-    void rebuildExportedMenu();
-    QString currentBaseName;
-    QString currentPath;
+
+    const QString lastFile() const
+    {
+        return QSettings().value("lastFile").toString();
+    }
+    const QString loadingFile() const
+    {
+        return QSettings().value("loadingFile").toString();
+    }
+    void setLastFile(QString path) const
+    {
+        QSettings().setValue("lastFile", path);
+    }
+    void setLoadingFile(QString path) const
+    {
+        QSettings().setValue("loadingFile", path);
+    }
     // Grid helpers
     struct GridDims { int cols, rows; };
     GridDims findOptimalGrid(int N) const;
-
+    GridDims m_grid = {1,1};
+    struct Sliders { int first, last, step; };
+    const Sliders getSliderValues() const;
     QPixmap composeGrid(int first, int count, int step);
     void paintGrid();
     void startPlayback();
@@ -121,6 +134,7 @@ private slots:
     void exportVideo();
     void exportAll();
     void openWithExplorer();
+    void openWithUrl();
     void openWithXnView();
     void openWithFastStone();
     void onFramesExtracted(QMap<int, QPixmap> frames, int delayMs);

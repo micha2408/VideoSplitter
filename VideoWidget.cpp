@@ -30,6 +30,10 @@
 #include <QRegularExpression>
 #include <QFileDialog>
 #include <qnetworkreply.h>
+#include <QWidgetAction>
+#include <QLabel>
+#include <QCursor>
+
 // ─── Constructor ────────────────────────────────────────────────────────────
 
 VideoWidget::VideoWidget(QWidget *parent)
@@ -61,6 +65,41 @@ VideoWidget::VideoWidget(QWidget *parent)
     actOpen->setShortcut(QKeySequence::Open);
     menuOpen->addSeparator();
     m_recentMenu   = menuOpen->addMenu("Zuletzt geöffnet/exportiert");
+    connect(m_recentMenu, &QMenu::hovered, this, [this](QAction *act)
+            {
+                QLabel *preview = m_recentMenu->findChild<QLabel*>("hoverPreview", Qt::FindDirectChildrenOnly);
+                if (!preview)
+                {
+                    preview = new QLabel(m_recentMenu, Qt::ToolTip | Qt::FramelessWindowHint);
+                    preview->setObjectName("hoverPreview");
+                    preview->setAttribute(Qt::WA_ShowWithoutActivating);
+                }
+                const QIcon ic = act->icon();
+                const QList<QSize> sizes = ic.availableSizes();
+                const QPixmap px = sizes.isEmpty() ? QPixmap() : ic.pixmap(sizes.first());
+                if (px.isNull())
+                {
+                    preview->hide();
+                    return;
+                }
+                preview->setPixmap(px);
+                preview->resize(px.size());
+                preview->move(QCursor::pos() + QPoint(20, 0));
+                preview->show();
+            });
+    connect(m_recentMenu, &QMenu::aboutToHide, this, [this]
+            {
+                if (auto *p = m_recentMenu->findChild<QLabel*>("hoverPreview", Qt::FindDirectChildrenOnly))
+                    p->hide();
+            });
+
+    // Eigener Extractor nur fürs erste Frame jeder History-Datei (asynchron, serialisiert)
+    m_previewExtractor = new FrameExtractor("ffmpeg", this);
+    connect(m_previewExtractor, &FrameExtractor::firstFrameReady,
+            this, &VideoWidget::onPreviewReady);
+    for (const QString &entry : QSettings().value("history/files").toStringList())
+        enqueuePreviewExtraction(entry.split(",").first());
+
     rebuildRecentMenu();
 
     QMenu *menuSave = new QMenu("Speichern", bar);
@@ -718,7 +757,7 @@ void VideoWidget::onFramesExtracted(QMap<int, QPixmap> frames, int delayMs)
         return;
     }
 
-    addToHistory(loadingFile());
+    addToHistory(loadingFile(), frames.first()); // Originalframe — addToHistory cappt auf kPreviewMaxSize
     setLoadingFile("");
     m_bigMap  = frames;
     m_bigMapBackup = frames;
@@ -1074,7 +1113,7 @@ void VideoWidget::openFile()
     if (!path.isEmpty()) doDropEvent(path);
 }
 
-void VideoWidget::addToHistory(const QString &pathAndUrl)
+void VideoWidget::addToHistory(const QString &pathAndUrl, const QPixmap &preview)
 {
     setLastFile(pathAndUrl); // damit es in "Zuletzt geöffnet" auftaucht
     QSettings s;
@@ -1084,7 +1123,45 @@ void VideoWidget::addToHistory(const QString &pathAndUrl)
     list.prepend(pathAndUrl);
     if (list.size() > 20) list.resize(20);
     s.setValue("history/files", list);
+
+    if (!preview.isNull())
+    {
+        // Aufrufer liefert bereits einen Frame (z. B. aus onFramesExtracted) → direkt in den Cache.
+        // Nur runter-, nie hochskalieren.
+        const QPixmap capped = (preview.width() > kPreviewMaxSize || preview.height() > kPreviewMaxSize)
+                                   ? preview.scaled(QSize(kPreviewMaxSize, kPreviewMaxSize),
+                                                    Qt::KeepAspectRatio, Qt::SmoothTransformation)
+                                   : preview;
+        m_previewCache.insert(parts[0], capped);
+    }
+    else if (!m_previewCache.contains(parts[0]))
+    {
+        enqueuePreviewExtraction(parts[0]);
+    }
     rebuildRecentMenu();
+}
+
+void VideoWidget::enqueuePreviewExtraction(const QString &path)
+{
+    if (path.isEmpty() || m_previewCache.contains(path) || m_previewQueue.contains(path))
+        return;
+    const bool wasIdle = m_previewQueue.isEmpty();
+    m_previewQueue.append(path);
+    if (wasIdle)
+        m_previewExtractor->extractFirstFrame(path, QSize(kPreviewMaxSize, kPreviewMaxSize));
+}
+
+void VideoWidget::onPreviewReady(QString sourcePath, QPixmap preview)
+{
+    m_previewQueue.removeAll(sourcePath);
+    if (!preview.isNull())
+    {
+        m_previewCache.insert(sourcePath, preview);
+        rebuildRecentMenu();
+    }
+    if (!m_previewQueue.isEmpty())
+        m_previewExtractor->extractFirstFrame(m_previewQueue.first(),
+                                              QSize(kPreviewMaxSize, kPreviewMaxSize));
 }
 
 
@@ -1101,9 +1178,11 @@ void VideoWidget::rebuildRecentMenu()
     for (const QString &f : hist)
     {
         const QString filePart = f.split(",").first(); // Pfad und evtl URL trennen
-        m_recentMenu->addAction(
+        const QIcon previewIcon(m_previewCache.value(filePart));
+        m_recentMenu->addAction(previewIcon,
             QString("%1\t%2").arg(QUrl(filePart).toString(QUrl::RemoveFilename),QFileInfo(filePart).fileName()),
-            this,[this, f]
+            QKeySequence(),
+            [this, f]
             {
                 doDropEvent(f);
             });

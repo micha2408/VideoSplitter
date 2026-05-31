@@ -84,8 +84,15 @@ private:
 
     // File history
     QMenu   *m_recentMenu   = nullptr;
-    void addToHistory(const QString &path);
+    void addToHistory(const QString &path, const QPixmap &preview = QPixmap());
     void rebuildRecentMenu();
+
+    // Preview cache (key = filePart of "path,url")
+    QMap<QString, QPixmap> m_previewCache;
+    QStringList            m_previewQueue;
+    FrameExtractor        *m_previewExtractor = nullptr;
+    static constexpr int   kPreviewMaxSize    = 64;
+    void enqueuePreviewExtraction(const QString &path);
 
     const QString lastFile() const
     {
@@ -138,6 +145,7 @@ private slots:
     void openWithXnView();
     void openWithFastStone();
     void onFramesExtracted(QMap<int, QPixmap> frames, int delayMs);
+    void onPreviewReady(QString sourcePath, QPixmap preview);
 
     void openWithViewer(const QString &settingsKey, const QString &title);
 };

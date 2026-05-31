@@ -2,6 +2,7 @@
 
 #include <QProcess>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QDebug>
 
@@ -156,6 +157,57 @@ void FrameExtractor::loadFrames()
     }
 
     emit finished(frames, delayMs);
+}
+
+void FrameExtractor::extractFirstFrame(const QString &videoPath, QSize maxSize)
+{
+    if (!m_tempDir.isValid())
+    {
+        emit firstFrameReady(videoPath, QPixmap());
+        return;
+    }
+
+    m_videoPath         = videoPath;
+    m_firstFrameMaxSize = maxSize;
+    m_stderrBuf.clear();
+
+    const QString outPath = m_tempDir.path() + "/preview.png";
+    QFile::remove(outPath); // alte preview.png aus vorherigem Aufruf entfernen
+    const QString scale = QString("scale=%1:%2:force_original_aspect_ratio=decrease")
+                              .arg(maxSize.width()).arg(maxSize.height());
+    const QStringList args = {
+        "-y",
+        "-i",        videoPath,
+        "-frames:v", "1",
+        "-vf",       scale,
+        "-update",   "1",
+        outPath
+    };
+
+    m_process = new QProcess(this);
+    connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, &FrameExtractor::onFirstFrameFinished);
+    m_process->start(m_ffmpeg, args);
+    if (!m_process->waitForStarted(3000))
+    {
+        m_process->deleteLater();
+        m_process = nullptr;
+        emit firstFrameReady(videoPath, QPixmap());
+    }
+}
+
+void FrameExtractor::onFirstFrameFinished(int exitCode)
+{
+    const QString src     = m_videoPath;
+    const QString outPath = m_tempDir.path() + "/preview.png";
+    m_process->deleteLater();
+    m_process = nullptr;
+
+    QPixmap px;
+    if (exitCode == 0) px.load(outPath);
+    QFile::remove(outPath);
+
+    emit firstFrameReady(src, px);
 }
 
 void FrameExtractor::cancel()

@@ -1119,7 +1119,11 @@ void VideoWidget::addToHistory(const QString &pathAndUrl, const QPixmap &preview
     QSettings s;
     QStringList parts = pathAndUrl.split(","); // Pfad und evtl URL trennen
     QStringList list = s.value("history/files").toStringList();
-    list.removeAt(list.indexOf(QRegularExpression(parts[0]+".*"))); // evtl bereits vorhandenen Eintrag entfernen, damit er weiter vorne landet
+    int index=list.indexOf(QRegularExpression(parts[0]+".*")); // vorhandenen Eintrag mit gleichem Pfad finden (unabhängig von URL)
+    if(index>=0)
+    {
+        list.removeAt(index); // bereits vorhandenen Eintrag entfernen, damit er weiter vorne landet
+    }
     list.prepend(pathAndUrl);
     if (list.size() > 20) list.resize(20);
     s.setValue("history/files", list);

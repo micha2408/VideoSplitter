@@ -12,6 +12,7 @@
 #include <QPixmap>
 #include <QFileDialog>
 #include <QSettings>
+#include <QCheckBox>
 
 class Label;
 class RangeSlider;
@@ -57,6 +58,8 @@ private:
     RangeSlider    *m_rangeSlider;
     QSlider        *m_sortSlider;
     QSlider        *m_speedSlider;
+    QCheckBox      *m_revers;
+    bool           m_isReversed = false;
     // Grid preview animation
     QList<QPixmap> m_previewList;
     QTimer         m_previewTimer;

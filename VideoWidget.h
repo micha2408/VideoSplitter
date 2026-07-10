@@ -87,9 +87,14 @@ private:
     FrameExtractor *m_extractor = nullptr;
 
     // File history
-    QMenu   *m_recentMenu   = nullptr;
+    QMenu   *m_recentMenu   = nullptr;   // Zuletzt geöffnet
+    QMenu   *m_exportMenu   = nullptr;   // Zuletzt exportiert (nur Videos, kein PNG)
     void addToHistory(const QString &path, const QPixmap &preview = QPixmap());
     void rebuildRecentMenu();
+    void addToExportHistory(const QString &path);
+    void rebuildExportMenu();
+    // Dateiname-Vorgabe des Export-Dialogs auf das neu geladene Video zurücksetzen
+    void resetExportNameForVideo(const QString &path);
 
     // Preview cache (key = filePart of "path,url")
     QMap<QString, QPixmap> m_previewCache;
@@ -121,6 +126,11 @@ private:
     struct Sliders { int first, last, step; };
     const Sliders getSliderValues() const;
     QPixmap composeGrid(int first, int count, int step);
+    // Tatsächlicher Sprite-Sheet-Dateiname inkl. (cols_rows_frames_fps)-Zusatz
+    QString spriteFileName(const QString &pngPath) const;
+    // Liste der bereits existierenden Zieldateien der gewählten Formate
+    QStringList existingExportTargets(const QString &dir, const QString &base,
+                                      bool webm, bool mp4, bool gif, bool png) const;
     void paintGrid();
     void startPlayback();
     void updateTitle();
@@ -143,8 +153,9 @@ private slots:
     void openFile();
     void saveSpriteSheet(const QString &path);
     void saveVideo(const QString &path);
-    void exportVideo();
-    void exportAll();
+    void exportDialog();
+    void runExport(const QString &dir, const QString &baseName,
+                   bool webm, bool mp4, bool gif, bool png);
     void openWithExplorer();
     void openWithUrl();
     void openWithXnView();

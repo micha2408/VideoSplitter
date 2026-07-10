@@ -33,6 +33,11 @@
 #include <QWidgetAction>
 #include <QLabel>
 #include <QCursor>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QLineEdit>
+#include <QPushButton>
 
 // ─── Constructor ────────────────────────────────────────────────────────────
 
@@ -64,7 +69,7 @@ VideoWidget::VideoWidget(QWidget *parent)
     QAction *actOpen = menuOpen->addAction("Datei öffnen …", this, &VideoWidget::openFile);
     actOpen->setShortcut(QKeySequence::Open);
     menuOpen->addSeparator();
-    m_recentMenu   = menuOpen->addMenu("Zuletzt geöffnet/exportiert");
+    m_recentMenu   = menuOpen->addMenu("Zuletzt geöffnet");
     connect(m_recentMenu, &QMenu::hovered, this, [this](QAction *act)
             {
                 QLabel *preview = m_recentMenu->findChild<QLabel*>("hoverPreview", Qt::FindDirectChildrenOnly);
@@ -102,10 +107,12 @@ VideoWidget::VideoWidget(QWidget *parent)
 
     rebuildRecentMenu();
 
+    m_exportMenu = menuOpen->addMenu("Zuletzt exportiert");
+    rebuildExportMenu();
+
     QMenu *menuSave = new QMenu("Speichern", bar);
     bar->addMenu(menuSave);
-    menuSave->addAction("Video exportieren", this, &VideoWidget::exportVideo);
-    menuSave->addAction("Alles exportieren ", this, &VideoWidget::exportAll);
+    menuSave->addAction("Exportieren …", this, &VideoWidget::exportDialog);
     menuSave->addSeparator();
     QMenu *menuOpenWith = menuOpen->addMenu("Öffnen mit …");
     menuOpenWith->addAction("Explorer/Website",  this, &VideoWidget::openWithExplorer);
@@ -287,7 +294,9 @@ VideoWidget::VideoWidget(QWidget *parent)
 
     QMetaObject::invokeMethod(this, [this]
                               {
-                                  doDropEvent(lastFile());
+                                  // Beim Start den obersten "Zuletzt geöffnet"-Eintrag automatisch öffnen
+                                  const QStringList opened = QSettings().value("history/files").toStringList();
+                                  if (!opened.isEmpty()) doDropEvent(opened.first());
                               }, Qt::QueuedConnection);
 }
 
@@ -767,6 +776,7 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
     if (pathAndUrl.isEmpty()) return;
     setLoadingFile(pathAndUrl);
     const QString path=pathAndUrl.split(",").first();
+    resetExportNameForVideo(path); // neues Video → Dateiname-Vorgabe neu setzen
     m_label->setDefaults();
     m_previewTimer.stop();
     m_playTimer.stop();
@@ -968,136 +978,259 @@ void VideoWidget::onBgFinished()
     }
 }
 
-void VideoWidget::exportAll()
+namespace
 {
-    if (m_bigMap.isEmpty()) return;
-    QSettings s;
-nochmal:
-    // QString selected;
-    QString path;
-
-    QStringList filters = {
-        "Ordner (*.)","Files (*.*)"
-    };
-    // while(true)
-    // {
-    //     bool done=true; // wenn der Benutzer den speziellen Ordner-Filter auswählt, muss der Dialog mit dem neuen Filter neu geöffnet werden, damit der Ordner-Auswahlmodus aktiviert wird. In diesem Fall soll aber nicht direkt der aktuelle Filter übernommen werden, sondern immer der erste (Ord
-    QFileDialog dlg(this, "Video exportieren");
-    dlg.setAcceptMode(QFileDialog::AcceptSave);
-    dlg.setOption(QFileDialog::DontConfirmOverwrite);
-    dlg.setDefaultSuffix("");
-    dlg.setDirectory(lastFile());
-    dlg.selectFile("video");
-    dlg.setLabelText(QFileDialog::Accept, "Accept");
-    dlg.setLabelText(QFileDialog::Reject, "Reject");
-    // } else
-    // {
-    //     dlg.setDirectory(s.value("save/dir").toString());
-    //     dlg.selectFile(currentBaseName);
-    // }
-    dlg.setNameFilters(filters);
-    // connect(&dlg, &QFileDialog::filterSelected, this, [this, &dlg, &filters, &done](const QString &filter)
-    // {
-    //     qDebug() << dlg.selectedFiles();
-    //     if(int index=filters.indexOf(filter))
-    //     {
-    //         filters.swapItemsAt(0,index);
-    //         dlg.close(); // Filterwechsel → Dialog neu öffnen, damit der spezielle Ordner-Filter oben ist
-    //         done = false;
-    //     }
-    // });
-    if (dlg.exec() != QDialog::Accepted)
+// Oberster Ordner im Pfad, der noch nicht existiert – leer, falls der ganze
+// Pfad schon vorhanden ist. Damit lässt sich merken, was mkpath neu anlegt.
+QString highestMissingDir(const QString &fullPath)
+{
+    QString p = QDir::cleanPath(fullPath);
+    QString highest;
+    while (!p.isEmpty() && !QDir(p).exists())
     {
-        qDebug() << "Export abgebrochen" << dlg.result();
-        return;
+        highest = p;
+        const QString parent = QFileInfo(p).path();
+        if (parent == p) break;
+        p = parent;
     }
-    // if(done)
-    // {
-    // selected = dlg.selectedNameFilter();
-    path = dlg.selectedFiles().value(0);
-    //     break;
-    // }
-    // }
-
-    if (path.isEmpty()) return;
-    QString nr("");
-    QStringList files;
-    QStringList mask;
-#define isDir QFileInfo(path).isDir()
-#define isDirEmpty QDir(path).isEmpty()
-    // if(selected.startsWith("Ordner"))
-    // {
-    //     mask = {path + "/" + "video%1.mp4", path + "/" + "video%1.gif", path + "/" + "video%1.png" };
-    //     if(not isDir)
-    //     {
-    //         QDir().mkpath(path); // Ordner erstellen, falls er nicht existiert
-    //     }
-    // } else
-    {
-        path.remove(QRegularExpression("(_\\d+)?\\.[^.\\\\/]+$")); // beliebige Extension (+ optionales _N) entfernen
-        mask = {path + "%1.mp4", path + "%1.gif", path + "%1.png" };
-    }
-    for(QString &file : mask)
-    {   // doppelte namen identifizieren
-        while(QFileInfo::exists(QString(file).arg(nr)))
-        {
-            nr="_"+QString::number(nr.mid(1).toInt()+1);
-        }
-    }
-    for(QString &file : mask)
-    {   // filenamen generieren
-        files << QString(file).arg(nr);
-    }
-
-    switch(QMessageBox::question(this, "Exportiere alle Videos",
-                                  QString("Es werden folgende Dateien erstellt:\n\n"
-                                          "Video: %1\n"
-                                          "GIF:   %2\n"
-                                          "Sprite: %3\n\n"
-                                          "OK zum Fortfahren, Abbrechen zum Abbrechen, retry fuer neuen Pfad")
-                                      .arg(files[0],files[1],files[2]),
-                                  QMessageBox::Ok | QMessageBox::Cancel | QMessageBox::Retry))
-    {
-    case QMessageBox::Ok:
-        break;
-    case QMessageBox::Retry:
-        if(isDir | isDirEmpty)
-        {
-            QDir(path).rmdir(path); // leeren Ordner entfernen, damit er bei erneutem Dialog wieder auswählbar ist
-        }
-        goto nochmal;
-    default:;
-        if(isDir | isDirEmpty)
-        {
-            QDir(path).rmdir(path); // leeren Ordner entfernen, damit er bei erneutem Dialog wieder auswählbar ist
-        }
-        return;
-    }
-    saveVideo(files[0]);
-    saveVideo(files[1]);
-    saveSpriteSheet(files[2]);
+    return highest;
 }
-void VideoWidget::exportVideo()
+
+// Entfernt die zuvor temporär angelegten (leeren) Ordner von unten nach oben,
+// bis einschließlich 'highest'. Nicht-leere Ordner bleiben unangetastet.
+void removeCreatedDirs(const QString &fullPath, const QString &highest)
+{
+    if (highest.isEmpty()) return;
+    QString p = QDir::cleanPath(fullPath);
+    while (!p.isEmpty())
+    {
+        if (QDir(p).exists())
+        {
+            if (!QDir(p).isEmpty()) break;   // es liegt etwas drin → stehen lassen
+            QDir().rmdir(p);
+        }
+        if (QDir::cleanPath(p) == QDir::cleanPath(highest)) break;
+        const QString parent = QFileInfo(p).path();
+        if (parent == p) break;
+        p = parent;
+    }
+}
+} // namespace
+
+void VideoWidget::exportDialog()
 {
     if (m_bigMap.isEmpty()) return;
 
-    QAction *senderAct = qobject_cast<QAction*>(sender());
     QSettings s;
-    const QString path = QFileDialog::getSaveFileName(
-        this, "Video exportieren",
-        lastFile(),
-        "Video exportieren WEBM (*.webM);;"
-        "Video exportieren MP4 (*.mp4);;"
-        "Video exportieren GIF (*.gif);;"
-        "Video exportieren PNG/LSL (*.png)");
-    if (path.isEmpty()) return;
-    if (path.endsWith(".png", Qt::CaseInsensitive))
+    const QString curPath = lastFile().split(",").first();
+    const QString defBase = QFileInfo(curPath).completeBaseName();       // Name des aktuellen Videos
+    const QString defDir  = s.value("export/dir",
+                                    QFileInfo(curPath).absolutePath()).toString(); // zuletzt genutzter Pfad
+
+    QDialog dlg(this);
+    dlg.setWindowTitle("Exportieren");
+
+    // 1. Dateiname (gemerkter Wert, sonst Name des aktuellen Videos)
+    QLineEdit *nameEdit = new QLineEdit(s.value("export/name", defBase).toString(), &dlg);
+
+    // 1b. Subordner (optional): verschiebt den Dateinamen in einen Unterordner
+    QCheckBox *cbSub   = new QCheckBox("Subordner", &dlg);
+    QLineEdit *subEdit = new QLineEdit(&dlg);
+    const bool subOn = s.value("export/subOn", false).toBool();
+    subEdit->setText(s.value("export/sub").toString());
+    cbSub->setChecked(subOn);
+    subEdit->setEnabled(subOn);
+    // Toggle erst nach dem Setzen des Startzustands verbinden
+    connect(cbSub, &QCheckBox::toggled, &dlg, [nameEdit, subEdit](bool on)
     {
-        // PNG export → sprite sheet + LSL
-        saveSpriteSheet(path);
+        if (on)
+        {
+            subEdit->setText(nameEdit->text());   // Dateiname → Subordner
+            subEdit->setEnabled(true);
+            nameEdit->setText("video");
+        }
+        else
+        {
+            nameEdit->setText(subEdit->text());   // Subordner → Dateiname zurück
+            subEdit->clear();
+            subEdit->setEnabled(false);
+        }
+    });
+
+    // 2. Pfad (voreingestellt mit zuletzt genutztem Ausgabepfad)
+    QLineEdit   *dirEdit   = new QLineEdit(defDir, &dlg);
+    QPushButton *browseBtn = new QPushButton("…", &dlg);
+    browseBtn->setFixedWidth(32);
+    connect(browseBtn, &QPushButton::clicked, &dlg, [&dlg, dirEdit, subEdit, cbSub]()
+    {
+        // Bei aktivem Subordner startet der Dialog in Ordner/Subordner; dazu
+        // wird dieser Pfad temporär angelegt und bei Abbruch wieder entfernt.
+        QString start = dirEdit->text();
+        QString created;
+        const QString sub = subEdit->text().trimmed();
+        if (cbSub->isChecked() && !sub.isEmpty())
+        {
+            start   = QDir::cleanPath(dirEdit->text() + "/" + sub);
+            created = highestMissingDir(start);
+            QDir().mkpath(start);
+        }
+        const QString d = QFileDialog::getExistingDirectory(
+            &dlg, "Zielordner wählen", start);
+        if (!d.isEmpty())
+            dirEdit->setText(d);
+        else
+            removeCreatedDirs(start, created); // Abbruch → temporäre Ordner entfernen
+    });
+    QHBoxLayout *dirRow = new QHBoxLayout;
+    dirRow->addWidget(dirEdit);
+    dirRow->addWidget(browseBtn);
+
+    // 3. Mehrfachauswahl der Formate
+    QCheckBox *cbWebm = new QCheckBox("WEBM", &dlg);
+    QCheckBox *cbMp4  = new QCheckBox("MP4",  &dlg);
+    QCheckBox *cbGif  = new QCheckBox("GIF",  &dlg);
+    QCheckBox *cbPng  = new QCheckBox("PNG",  &dlg);
+    cbWebm->setChecked(s.value("export/webm", true).toBool());
+    cbMp4 ->setChecked(s.value("export/mp4",  true).toBool());
+    cbGif ->setChecked(s.value("export/gif",  true).toBool());
+    cbPng ->setChecked(s.value("export/png",  true).toBool());
+    cbPng->setToolTip("Sprite-Sheet mit Zusatzinfos für die TextureAnimation");
+
+    QHBoxLayout *fmtRow = new QHBoxLayout;
+    fmtRow->addWidget(cbWebm);
+    fmtRow->addWidget(cbMp4);
+    fmtRow->addWidget(cbGif);
+    fmtRow->addWidget(cbPng);
+    fmtRow->addStretch();
+
+    QFormLayout *form = new QFormLayout;
+    form->addRow("Dateiname:", nameEdit);
+    form->addRow(cbSub,        subEdit);
+    form->addRow("Ordner:",    dirRow);
+    form->addRow("Formate:",   fmtRow);
+
+    // 4. Export starten oder abbrechen
+    QDialogButtonBox *bb = new QDialogButtonBox(&dlg);
+    bb->addButton("Export",    QDialogButtonBox::AcceptRole);
+    bb->addButton("Abbrechen", QDialogButtonBox::RejectRole);
+    connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    QVBoxLayout *lay = new QVBoxLayout(&dlg);
+    lay->addLayout(form);
+    lay->addWidget(bb);
+
+    // Bei jeder Änderung prüfen, ob eine der Zieldateien schon existiert.
+    // Dateiname-Feld wird dann rot, Tooltip nennt die betroffenen Dateien.
+    auto validate = [this, nameEdit, subEdit, cbSub, dirEdit,
+                     cbWebm, cbMp4, cbGif, cbPng]()
+    {
+        QString dir = dirEdit->text().trimmed();
+        const QString sub = subEdit->text().trimmed();
+        if (cbSub->isChecked() && !sub.isEmpty())
+            dir = QDir::cleanPath(dir + "/" + sub);
+
+        const QString base = nameEdit->text().trimmed();
+        const QStringList existing = base.isEmpty() ? QStringList()
+            : existingExportTargets(dir, base, true, true, true, true); // immer alle Formate prüfen
+        if (existing.isEmpty())
+        {
+            nameEdit->setStyleSheet(QString());
+            nameEdit->setToolTip(QString());
+        }
+        else
+        {
+            nameEdit->setStyleSheet("background-color:#ffb0b0;");
+            nameEdit->setToolTip("Diese Dateien existieren bereits und werden "
+                                 "beim Export überschrieben:\n" + existing.join("\n"));
+        }
+    };
+    connect(nameEdit, &QLineEdit::textChanged, &dlg, validate);
+    connect(subEdit,  &QLineEdit::textChanged, &dlg, validate);
+    connect(dirEdit,  &QLineEdit::textChanged, &dlg, validate);
+    connect(cbSub,  &QCheckBox::toggled, &dlg, validate);
+    connect(cbWebm, &QCheckBox::toggled, &dlg, validate);
+    connect(cbMp4,  &QCheckBox::toggled, &dlg, validate);
+    connect(cbGif,  &QCheckBox::toggled, &dlg, validate);
+    connect(cbPng,  &QCheckBox::toggled, &dlg, validate);
+    validate();
+
+    const int result = dlg.exec();
+
+    // Parameter immer merken – bleiben so auch nach Abbruch erhalten
+    s.setValue("export/name",  nameEdit->text());
+    s.setValue("export/subOn", cbSub->isChecked());
+    s.setValue("export/sub",   subEdit->text());
+    s.setValue("export/dir",   dirEdit->text());
+    s.setValue("export/webm",  cbWebm->isChecked());
+    s.setValue("export/mp4",   cbMp4->isChecked());
+    s.setValue("export/gif",   cbGif->isChecked());
+    s.setValue("export/png",   cbPng->isChecked());
+
+    if (result != QDialog::Accepted) return;
+
+    const QString base = nameEdit->text().trimmed();
+    QString dir        = dirEdit->text().trimmed();
+    if (base.isEmpty() || dir.isEmpty()) return;
+    const QString sub = subEdit->text().trimmed();
+    if (cbSub->isChecked() && !sub.isEmpty())
+        dir = QDir::cleanPath(dir + "/" + sub);   // Export in Ordner/Subordner
+    if (!cbWebm->isChecked() && !cbMp4->isChecked()
+        && !cbGif->isChecked() && !cbPng->isChecked())
+    {
+        QMessageBox::information(this, "Export", "Es wurde kein Format ausgewählt.");
         return;
     }
-    saveVideo(path);
+
+    runExport(dir, base,
+              cbWebm->isChecked(), cbMp4->isChecked(),
+              cbGif->isChecked(),  cbPng->isChecked());
+}
+
+void VideoWidget::runExport(const QString &dir, const QString &baseName,
+                            bool webm, bool mp4, bool gif, bool png)
+{
+    QDir().mkpath(dir);
+    const QString stem = dir + "/" + baseName;
+    if (webm) saveVideo(stem + ".webm");
+    if (mp4)  saveVideo(stem + ".mp4");
+    if (gif)  saveVideo(stem + ".gif");
+    if (png)  saveSpriteSheet(stem + ".png");
+}
+
+QString VideoWidget::spriteFileName(const QString &pngPath) const
+{
+    auto sliders = getSliderValues();
+    const int frameCount = sliders.last - sliders.first + 1;
+    const int N = qMax(1, frameCount / sliders.step);
+    const GridDims g = findOptimalGrid(N);
+    int frames = 0;
+    for (int i = 0; i < N; ++i)
+    {
+        const int key = sliders.first + i * sliders.step;
+        if (key >= 0 && key < m_bigMap.size()) ++frames;
+    }
+    const double fps = m_delay > 0 ? 1000.0 / (m_delay * sliders.step) : 25.0;
+    QString out(pngPath);
+    out.replace(".png", QString("(%1_%2_%3_%4).png")
+                    .arg(g.cols).arg(g.rows).arg(frames).arg(int(fps)));
+    return out;
+}
+
+QStringList VideoWidget::existingExportTargets(const QString &dir, const QString &base,
+                                               bool webm, bool mp4, bool gif, bool png) const
+{
+    QStringList targets;
+    const QString stem = dir + "/" + base;
+    if (webm) targets << stem + ".webm";
+    if (mp4)  targets << stem + ".mp4";
+    if (gif)  targets << stem + ".gif";
+    if (png)  targets << spriteFileName(stem + ".png");
+
+    QStringList existing;
+    for (const QString &t : targets)
+        if (QFileInfo::exists(t)) existing << t;
+    return existing;
 }
 
 void VideoWidget::saveVideo(const QString &path)
@@ -1109,7 +1242,7 @@ void VideoWidget::saveVideo(const QString &path)
     opts.outputPath = path;
     if (path.endsWith(".mp4", Qt::CaseInsensitive))      opts.format = VideoExporter::MP4;
     else if (path.endsWith(".gif", Qt::CaseInsensitive)) opts.format = VideoExporter::GIF;
-    else if (path.endsWith(".webM", Qt::CaseInsensitive)) opts.format = VideoExporter::GIF;
+    else if (path.endsWith(".webm", Qt::CaseInsensitive)) opts.format = VideoExporter::WebM;
     else
     {
         QMessageBox::warning(this, "Export-Fehler", "Unbekanntes Format:\n" + path);
@@ -1140,7 +1273,7 @@ void VideoWidget::saveVideo(const QString &path)
     connect(exporter, &VideoExporter::finished, this, [this, exporter](const QString &out)
             {
                 setWindowTitle("VideoConverter");
-                addToHistory(QFileInfo(out).absolutePath());
+                addToExportHistory(out); // nur exportierte Videos merken (kein PNG)
                 exporter->deleteLater();
                 QMessageBox::information(this, "Export fertig", "Gespeichert:\n" + out);
             });
@@ -1157,12 +1290,9 @@ void VideoWidget::saveVideo(const QString &path)
 void VideoWidget::saveSpriteSheet(const QString &path)
 {
     auto sliders = getSliderValues();
-    const double fps = m_delay > 0 ? 1000.0 / (m_delay * sliders.step) : 25.0;
     const QPixmap grid = composeGrid(sliders.first, sliders.last - sliders.first + 1, sliders.step);
 
-
-    QString pathExt(path);
-    pathExt.replace(".png",QString("(%1_%2_%3_%4).png").arg(m_grid.cols).arg(m_grid.rows).arg(m_previewList.size()).arg(int(fps)));
+    const QString pathExt = spriteFileName(path);
     if (grid.save(pathExt))
     {
         // QSettings().setValue("save/dir", QFileInfo(path).absolutePath());
@@ -1174,22 +1304,6 @@ void VideoWidget::saveSpriteSheet(const QString &path)
     {
         QMessageBox::warning(this, "Export-Fehler", "Konnte nicht speichern:\n" + path);
         return;
-    }
-
-    // LSL-Script daneben ablegen
-    const QString lslPath = QFileInfo(path).absolutePath() + "/"
-                            + QFileInfo(path).baseName() + ".lsl";
-    QFile lslFile(lslPath);
-    if (lslFile.open(QIODevice::WriteOnly | QIODevice::Text))
-    {
-        QTextStream ts(&lslFile);
-        QString pingPong = m_revers->isChecked() ? " | PING_PONG":  "";
-        ts << "// Auto-generated by VideoConverter\n";
-        ts << "// Sprite-Sheet: " << m_grid.cols << "x" << m_grid.rows
-           << ", " << m_previewList.size() << " frames @ " << QString::number(fps, 'f', 1) << " fps\n";
-        ts << "llSetTextureAnim(ANIM_ON | LOOP" << pingPong << ", ALL_SIDES, "
-           << m_grid.cols << ", " << m_grid.rows << ", 0, " << m_previewList.size() << ", "
-           << QString::number(fps, 'f', 2) << ");\n";
     }
 }
 
@@ -1206,10 +1320,12 @@ void VideoWidget::openFile()
 
 void VideoWidget::addToHistory(const QString &pathAndUrl, const QPixmap &preview)
 {
+    if (pathAndUrl.isEmpty()) return; // kein Leereintrag → history/files bleibt lesbares REG_MULTI_SZ
     setLastFile(pathAndUrl); // damit es in "Zuletzt geöffnet" auftaucht
     QSettings s;
     QStringList parts = pathAndUrl.split(","); // Pfad und evtl URL trennen
     QStringList list = s.value("history/files").toStringList();
+    list.removeAll(QString()); // evtl. vorhandene Alt-Leereinträge einmalig bereinigen
     int index=list.indexOf(QRegularExpression(parts[0]+".*")); // vorhandenen Eintrag mit gleichem Pfad finden (unabhängig von URL)
     if(index>=0)
     {
@@ -1277,6 +1393,56 @@ void VideoWidget::rebuildRecentMenu()
         m_recentMenu->addAction(previewIcon,
             QString("%1\t%2").arg(QUrl(filePart).toString(QUrl::RemoveFilename),QFileInfo(filePart).fileName()),
             QKeySequence(),
+            [this, f]
+            {
+                doDropEvent(f);
+            });
+    }
+}
+
+void VideoWidget::resetExportNameForVideo(const QString &path)
+{
+    const QString base = QFileInfo(path).completeBaseName();
+    if (base.isEmpty()) return;
+    QSettings s;
+    if (s.value("export/subOn", false).toBool())
+    {
+        s.setValue("export/sub",  base);   // im Subordner-Modus wandert der Name in den Subordner
+        s.setValue("export/name", "video");
+    }
+    else
+    {
+        s.setValue("export/name", base);
+    }
+}
+
+void VideoWidget::addToExportHistory(const QString &path)
+{
+    QSettings s;
+    QStringList list = s.value("export/history").toStringList();
+    list.removeAll(path); // vorhandenen Eintrag entfernen, damit er wieder nach vorne rutscht
+    list.prepend(path);
+    if (list.size() > 20) list.resize(20);
+    s.setValue("export/history", list);
+    rebuildExportMenu();
+}
+
+void VideoWidget::rebuildExportMenu()
+{
+    if (!m_exportMenu) return;
+    m_exportMenu->clear();
+    const QStringList hist = QSettings().value("export/history").toStringList();
+    if (hist.isEmpty())
+    {
+        QAction *empty = m_exportMenu->addAction("(leer)");
+        empty->setEnabled(false);
+        return;
+    }
+    for (const QString &f : hist)
+    {
+        m_exportMenu->addAction(
+            QString("%1\t%2").arg(QFileInfo(f).absolutePath(), QFileInfo(f).fileName()),
+            this,
             [this, f]
             {
                 doDropEvent(f);

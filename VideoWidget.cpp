@@ -116,6 +116,7 @@ VideoWidget::VideoWidget(QWidget *parent)
     QMenu *menuEdit = new QMenu("Bearbeiten", bar);
     bar->addMenu(menuEdit);
     menuEdit->addAction("Pause / Weiter  [Space]", this, &VideoWidget::togglePause);
+    menuEdit->addAction("min/max reduzieren", this, &VideoWidget::reduceMinMax);
 
     QMenu *menuFx = new QMenu("Effekte", bar);
     bar->addMenu(menuFx);
@@ -380,6 +381,58 @@ void VideoWidget::togglePause()
     updateTitle();
 }
 
+void VideoWidget::reduceMinMax()
+{
+    if (m_bigMap.isEmpty()) return;
+
+    const int lower = m_rangeSlider->lowerValue();
+    const int upper = m_rangeSlider->upperValue();
+    if (lower <= 0 && upper >= m_bigMap.size() - 1) return; // nichts zu reduzieren
+
+    const int newCount = upper - lower + 1;
+    m_bigMap       = m_bigMap.mid(lower, newCount);
+    m_bigMapBackup = m_bigMapBackup.mid(lower, newCount); // gelöschte Frames sind unwiederruflich weg
+
+    m_playTimer.stop();
+    m_previewTimer.stop();
+
+    // Aktuelle Position relativ zum neuen Bereich erhalten
+    m_playIndex = qBound(0, m_playIndex - lower, newCount - 1);
+
+    m_rangeSlider->blockSignals(true);
+    m_sortSlider->blockSignals(true);
+
+    m_rangeSlider->setRange(0, newCount - 1);
+    m_rangeSlider->setLowerValue(0);
+    m_rangeSlider->setUpperValue(newCount - 1);
+    m_rangeSlider->setValue(m_playIndex);
+
+    const int maxSort = qMax(1, newCount / 2);
+    const int newSort  = qBound(1, m_sortSlider->value(), maxSort);
+    m_sortSlider->setRange(1, maxSort);
+    m_sortSlider->setValue(newSort);
+
+    m_rangeSlider->blockSignals(false);
+    m_sortSlider->blockSignals(false);
+
+    m_labelLower->setText("0");
+    m_labelUpper->setText(QString::number(newCount - 1));
+    m_labelSort->setText(QString("%1/%2").arg(newSort).arg(maxSort));
+
+    if (m_showingGrid)
+    {
+        paintGrid();
+    }
+    else
+    {
+        showFrame(m_playIndex);
+        if (!m_paused)
+            m_playTimer.start(qMax(1, m_delay * newSort));
+    }
+    updateTitle();
+}
+
+
 void VideoWidget::keyPressEvent(QKeyEvent *event)
 {
     if (event->key() == Qt::Key_Space)
@@ -400,7 +453,7 @@ void VideoWidget::playTick()
 {
     auto sliders = getSliderValues();
 
-    if (!m_bigMap.contains(m_playIndex))
+    if (m_playIndex < 0 || m_playIndex >= m_bigMap.size())
     {
         m_playIndex = sliders.first;
     }
@@ -469,7 +522,7 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
     for (int i = 0; i < N; ++i)
     {
         const int key = first + i * step;
-        if (!m_bigMap.contains(key)) continue;
+        if (key < 0 || key >= m_bigMap.size()) continue;
 
         // Apply crop if one is set
         QPixmap src = m_bigMap[key];
@@ -519,7 +572,7 @@ void VideoWidget::paintGrid()
 
 void VideoWidget::showFrame(int index)
 {
-    if (!m_bigMap.contains(index)) return;
+    if (index < 0 || index >= m_bigMap.size()) return;
     QPixmap px = m_bigMap[index];
     const QRect cr = m_label->cropRectInImageCoords();
     if (!cr.isEmpty() && cr != px.rect()) px = px.copy(cr);
@@ -752,7 +805,7 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
         setLoadingFile("");
         const QPixmap px(path);
         if (px.isNull()) return;
-        onFramesExtracted({{0, px}}, 40);
+        onFramesExtracted({px}, 40);
     }
     else
     {
@@ -775,7 +828,7 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
     }
 }
 
-void VideoWidget::onFramesExtracted(QMap<int, QPixmap> frames, int delayMs)
+void VideoWidget::onFramesExtracted(QVector<QPixmap> frames, int delayMs)
 {
     if (m_extractor)
     {
@@ -850,7 +903,7 @@ void VideoWidget::startBgRemoval()
     QMap<int, QPixmap> toProcess;
     for (int i = sliders.first; i <= sliders.last; i += sliders.step)
     {
-        if (m_bigMap.contains(i))
+        if (i >= 0 && i < m_bigMap.size())
         {
             toProcess[i] = m_bigMap[i];
         }
@@ -881,6 +934,7 @@ void VideoWidget::startBgRemoval()
 
 void VideoWidget::onBgFrameReady(int index, QPixmap result)
 {
+    if (index < 0 || index >= m_bigMap.size()) return;
     m_bigMap[index] = result;
     // Show current frame live if it's visible
     if (!m_showingGrid && m_label->currentIndex() == index)
@@ -906,7 +960,7 @@ void VideoWidget::onBgFinished()
     else
     {
         const int cur = m_rangeSlider->lowerValue();
-        if (m_bigMap.contains(cur))
+        if (cur >= 0 && cur < m_bigMap.size())
         {
             m_label->setImage(m_bigMap[cur], cur, m_bigMap.size(), m_delay);
             m_label->update();
@@ -1070,7 +1124,7 @@ void VideoWidget::saveVideo(const QString &path)
     int idx = 0;
     for (int i = sliders.first; i <= sliders.last; i += sliders.step)
     {
-        if (!m_bigMap.contains(i)) continue;
+        if (i < 0 || i >= m_bigMap.size()) continue;
         QPixmap px = m_bigMap[i];
         if (!cropRect.isEmpty() && cropRect != px.rect())
             px = px.copy(cropRect);

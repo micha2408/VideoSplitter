@@ -3,6 +3,7 @@
 #include <QPixmap>
 #include <QSize>
 #include <QTemporaryDir>
+#include <QVector>
 
 class QProcess;
 
@@ -19,7 +20,7 @@ public:
 
 signals:
     void progress(int done, int total);
-    void finished(QMap<int, QPixmap> frames, int delayMs);
+    void finished(QVector<QPixmap> frames, int delayMs);
     void firstFrameReady(QString sourcePath, QPixmap preview);
     void error(const QString &msg);
 

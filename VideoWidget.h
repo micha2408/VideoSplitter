@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QMap>
+#include <QVector>
 #include <QTimer>
 #include <QList>
 #include <QLabel>
@@ -40,9 +41,9 @@ private:
                                 const QString &targetDir,
                                 bool overwrite = false);
     void doDropEvent(const QString &path);
-    // All captured frames (index → pixmap)
-    QMap<int, QPixmap> m_bigMap;
-    QMap<int, QPixmap> m_bigMapBackup;
+    // All captured frames (contiguous, index 0..size()-1)
+    QVector<QPixmap> m_bigMap;
+    QVector<QPixmap> m_bigMapBackup;
     int  m_delay      = 0;
     bool m_fillingMap = false;
 
@@ -124,6 +125,7 @@ private:
     void startPlayback();
     void updateTitle();
     void showFrame(int index);
+    void reduceMinMax();
 
 private slots:
     void toggleView();
@@ -147,7 +149,7 @@ private slots:
     void openWithUrl();
     void openWithXnView();
     void openWithFastStone();
-    void onFramesExtracted(QMap<int, QPixmap> frames, int delayMs);
+    void onFramesExtracted(QVector<QPixmap> frames, int delayMs);
     void onPreviewReady(QString sourcePath, QPixmap preview);
 
     void openWithViewer(const QString &settingsKey, const QString &title);

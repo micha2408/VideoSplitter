@@ -147,12 +147,13 @@ void FrameExtractor::loadFrames()
     if (m_fps <= 0) m_fps = 25.0;
     const int delayMs = qMax(16, qRound(1000.0 / m_fps));
 
-    QMap<int, QPixmap> frames;
+    QVector<QPixmap> frames;
+    frames.reserve(total);
     for (int i = 0; i < total; ++i)
     {
         QPixmap px(dir.absoluteFilePath(files[i]));
         if (!px.isNull())
-            frames[i] = px;
+            frames.append(px);
         emit progress(i + 1, total);
     }
 

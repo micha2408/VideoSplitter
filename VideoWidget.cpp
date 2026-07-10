@@ -1159,7 +1159,11 @@ void VideoWidget::saveSpriteSheet(const QString &path)
     auto sliders = getSliderValues();
     const double fps = m_delay > 0 ? 1000.0 / (m_delay * sliders.step) : 25.0;
     const QPixmap grid = composeGrid(sliders.first, sliders.last - sliders.first + 1, sliders.step);
-    if (grid.save(path))
+
+
+    QString pathExt(path);
+    pathExt.replace(".png",QString("(%1_%2_%3_%4).png").arg(m_grid.cols).arg(m_grid.rows).arg(m_previewList.size()).arg(int(fps)));
+    if (grid.save(pathExt))
     {
         // QSettings().setValue("save/dir", QFileInfo(path).absolutePath());
         // addToExported(path);

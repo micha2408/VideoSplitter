@@ -694,6 +694,10 @@ void VideoWidget::dropEvent(QDropEvent *event)
     auto &m=*event->mimeData();
     QString lastWebsite;
     QUrl url;
+    if(m.hasHtml())
+    {
+        qDebug() <<  m.html();
+    }
     if(m.hasUrls())
     {
         url = m.urls().first();
@@ -703,13 +707,13 @@ void VideoWidget::dropEvent(QDropEvent *event)
             return;
         }
         lastWebsite = url.toString(QUrl::RemoveQuery | QUrl::RemoveFragment);
-        QRegularExpression re(R"(\.(mp4|gif|webm|png|jpg|jpeg|bmp|tif|tiff|webp)$)",
-                              QRegularExpression::CaseInsensitiveOption);
-        if(re.match(lastWebsite).hasMatch())
-        {
-            doDropEvent(url.toString());
-            return;
-        }
+        // QRegularExpression re(R"(\.(mp4|gif|webm|png|jpg|jpeg|bmp|tif|tiff|webp)$)",
+        //                       QRegularExpression::CaseInsensitiveOption);
+        // if(re.match(lastWebsite).hasMatch())
+        // {
+        //     doDropEvent(url.toString());
+        //     return;
+        // }
     }
     if(m.hasHtml())
     {
@@ -813,7 +817,27 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
         // Einzelbild → sofort laden
         addToHistory(pathAndUrl);
         setLoadingFile("");
-        const QPixmap px(path);
+
+        QPixmap px;
+        if (path.startsWith("http", Qt::CaseInsensitive))
+        {
+            // via http request direkt lesen und nach px ablegen
+            QNetworkAccessManager nam;
+            QNetworkRequest request{QUrl(path)};
+            QNetworkReply *reply = nam.get(request);
+            QEventLoop loop;
+            connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+            loop.exec();
+            if (reply->error() == QNetworkReply::NoError)
+            {
+                px.loadFromData(reply->readAll());
+            }
+            reply->deleteLater();
+        }
+        else
+        {
+            px.load(path);
+        }
         if (px.isNull()) return;
         onFramesExtracted({px}, 40);
     }

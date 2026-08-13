@@ -38,6 +38,7 @@
 #include <QFormLayout>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QCryptographicHash>
 
 // ─── Constructor ────────────────────────────────────────────────────────────
 
@@ -1051,8 +1052,13 @@ void VideoWidget::exportDialog()
     const QString defDir  = s.value("export/dir",
                                     QFileInfo(curPath).absolutePath()).toString(); // zuletzt genutzter Pfad
 
+    // Einzelbild? Dann nur PNG, und der Vorgabename lautet "picture…"
+    const int  frameCount = exportFrameCount();
+    const bool single     = frameCount <= 1;
+
     QDialog dlg(this);
-    dlg.setWindowTitle("Exportieren");
+    dlg.setWindowTitle(QString("Exportieren von %1 %2")
+                           .arg(frameCount).arg(single ? "Frame" : "Frames"));
 
     // 1. Dateiname (gemerkter Wert, sonst Name des aktuellen Videos)
     QLineEdit *nameEdit = new QLineEdit(s.value("export/name", defBase).toString(), &dlg);
@@ -1064,14 +1070,15 @@ void VideoWidget::exportDialog()
     subEdit->setText(s.value("export/sub").toString());
     cbSub->setChecked(subOn);
     subEdit->setEnabled(subOn);
+    if (subOn) nameEdit->setText(exportDefaultName()); // Vorgabename inkl. Hash
     // Toggle erst nach dem Setzen des Startzustands verbinden
-    connect(cbSub, &QCheckBox::toggled, &dlg, [nameEdit, subEdit](bool on)
+    connect(cbSub, &QCheckBox::toggled, &dlg, [this, nameEdit, subEdit](bool on)
     {
         if (on)
         {
             subEdit->setText(nameEdit->text());   // Dateiname → Subordner
             subEdit->setEnabled(true);
-            nameEdit->setText("video");
+            nameEdit->setText(exportDefaultName());
         }
         else
         {
@@ -1120,6 +1127,19 @@ void VideoWidget::exportDialog()
     cbPng ->setChecked(s.value("export/png",  true).toBool());
     cbPng->setToolTip("Sprite-Sheet mit Zusatzinfos für die TextureAnimation");
 
+    if (single)
+    {
+        // Einzelbild: Video-Formate sind sinnlos → aus und gesperrt, PNG fest an
+        for (QCheckBox *cb : {cbWebm, cbMp4, cbGif})
+        {
+            cb->setChecked(false);
+            cb->setEnabled(false);
+            cb->setToolTip("Nur bei mehr als einem Frame verfügbar");
+        }
+        cbPng->setChecked(true);
+        cbPng->setToolTip("Einzelbild als PNG");
+    }
+
     QHBoxLayout *fmtRow = new QHBoxLayout;
     fmtRow->addWidget(cbWebm);
     fmtRow->addWidget(cbMp4);
@@ -1146,7 +1166,7 @@ void VideoWidget::exportDialog()
 
     // Bei jeder Änderung prüfen, ob eine der Zieldateien schon existiert.
     // Dateiname-Feld wird dann rot, Tooltip nennt die betroffenen Dateien.
-    auto validate = [this, nameEdit, subEdit, cbSub, dirEdit,
+    auto validate = [this, single, nameEdit, subEdit, cbSub, dirEdit,
                      cbWebm, cbMp4, cbGif, cbPng]()
     {
         QString dir = dirEdit->text().trimmed();
@@ -1155,8 +1175,9 @@ void VideoWidget::exportDialog()
             dir = QDir::cleanPath(dir + "/" + sub);
 
         const QString base = nameEdit->text().trimmed();
+        // immer alle möglichen Formate prüfen (beim Einzelbild nur PNG)
         const QStringList existing = base.isEmpty() ? QStringList()
-            : existingExportTargets(dir, base, true, true, true, true); // immer alle Formate prüfen
+            : existingExportTargets(dir, base, !single, !single, !single, true);
         if (existing.isEmpty())
         {
             nameEdit->setStyleSheet(QString());
@@ -1186,10 +1207,13 @@ void VideoWidget::exportDialog()
     s.setValue("export/subOn", cbSub->isChecked());
     s.setValue("export/sub",   subEdit->text());
     s.setValue("export/dir",   dirEdit->text());
-    s.setValue("export/webm",  cbWebm->isChecked());
-    s.setValue("export/mp4",   cbMp4->isChecked());
-    s.setValue("export/gif",   cbGif->isChecked());
-    s.setValue("export/png",   cbPng->isChecked());
+    if (!single) // beim Einzelbild erzwungene Format-Auswahl nicht als Vorgabe merken
+    {
+        s.setValue("export/webm", cbWebm->isChecked());
+        s.setValue("export/mp4",  cbMp4->isChecked());
+        s.setValue("export/gif",  cbGif->isChecked());
+        s.setValue("export/png",  cbPng->isChecked());
+    }
 
     if (result != QDialog::Accepted) return;
 
@@ -1222,8 +1246,33 @@ void VideoWidget::runExport(const QString &dir, const QString &baseName,
     if (png)  saveSpriteSheet(stem + ".png");
 }
 
+// Anzahl der Frames, die der aktuelle Bereich (mit step) tatsächlich exportiert.
+// 1 bedeutet Einzelbild – dann gibt es weder Video-Formate noch Grid-Zusatz.
+int VideoWidget::exportFrameCount() const
+{
+    const auto sliders = getSliderValues();
+    const int step = qMax(1, sliders.step);
+    int n = 0;
+    for (int i = sliders.first; i <= sliders.last; i += step)
+        if (i >= 0 && i < m_bigMap.size()) ++n;
+    return n;
+}
+
+// Vorgabename im Subordner-Modus: "video"/"picture" plus 8-stelligem Hash der
+// Quelldatei, damit gleichnamige Exporte aus verschiedenen Videos eindeutig sind.
+QString VideoWidget::exportDefaultName() const
+{
+    const QString src  = lastFile().split(",").first();
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(src.toUtf8(), QCryptographicHash::Sha1).toHex().left(8));
+    return (exportFrameCount() <= 1 ? QStringLiteral("picture") : QStringLiteral("video"))
+           + "_" + hash;
+}
+
 QString VideoWidget::spriteFileName(const QString &pngPath) const
 {
+    if (exportFrameCount() <= 1) return pngPath;   // Einzelbild → Name bleibt unverändert
+
     auto sliders = getSliderValues();
     const int frameCount = sliders.last - sliders.first + 1;
     const int N = qMax(1, frameCount / sliders.step);

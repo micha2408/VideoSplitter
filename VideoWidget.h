@@ -126,6 +126,10 @@ private:
     struct Sliders { int first, last, step; };
     const Sliders getSliderValues() const;
     QPixmap composeGrid(int first, int count, int step);
+    // Anzahl der Frames, die der aktuelle Bereich exportiert (1 = Einzelbild)
+    int exportFrameCount() const;
+    // Vorgabename im Subordner-Modus: "video"/"picture" + 8-stelliger Hash
+    QString exportDefaultName() const;
     // Tatsächlicher Sprite-Sheet-Dateiname inkl. (cols_rows_frames_fps)-Zusatz
     QString spriteFileName(const QString &pngPath) const;
     // Liste der bereits existierenden Zieldateien der gewählten Formate

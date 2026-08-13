@@ -104,7 +104,9 @@ VideoWidget::VideoWidget(QWidget *parent)
     connect(m_previewExtractor, &FrameExtractor::firstFrameReady,
             this, &VideoWidget::onPreviewReady);
     for (const QString &entry : QSettings().value("history/files").toStringList())
+    {
         enqueuePreviewExtraction(entry.split(",").first());
+    }
 
     rebuildRecentMenu();
 
@@ -347,7 +349,9 @@ VideoWidget::GridDims VideoWidget::findOptimalGrid(int N) const
     for (int cols = 1; cols <= N; ++cols)
     {
         const int baseRows = (N + cols - 1) / cols;
-        for (int extra = 0; extra <= 1; ++extra) {          // try +0 and +1 extra row
+        // try +0 and +1 extra row
+        for (int extra = 0; extra <= 1; ++extra)
+        {
             const int rows  = baseRows + extra;
             const int waste = cols * rows - N;
 
@@ -1254,7 +1258,9 @@ int VideoWidget::exportFrameCount() const
     const int step = qMax(1, sliders.step);
     int n = 0;
     for (int i = sliders.first; i <= sliders.last; i += step)
+    {
         if (i >= 0 && i < m_bigMap.size()) ++n;
+    }
     return n;
 }
 
@@ -1302,7 +1308,9 @@ QStringList VideoWidget::existingExportTargets(const QString &dir, const QString
 
     QStringList existing;
     for (const QString &t : targets)
+    {
         if (QFileInfo::exists(t)) existing << t;
+    }
     return existing;
 }
 

@@ -98,7 +98,8 @@ QPixmap SplitView::composeGrid(int first, int count, int step)
     result.fill(Qt::transparent);
     QPainter p(&result);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    for (int i = 0; i < count; ++i) {
+    for (int i = 0; i < count; ++i)
+    {
         int row = i / cols;
         int col = i % cols;
 

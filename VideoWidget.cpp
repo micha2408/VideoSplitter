@@ -39,6 +39,9 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QCryptographicHash>
+#include <QPlainTextEdit>
+#include <QSplitter>
+#include <QTime>
 
 // ─── Constructor ────────────────────────────────────────────────────────────
 
@@ -189,6 +192,7 @@ VideoWidget::VideoWidget(QWidget *parent)
                                               m_bgRemover = nullptr;
                                               m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
                                               setWindowTitle("VideoConverter");
+                                              logMessage("Hintergrund entfernen abgebrochen");
                                           }
                                           else
                                           {
@@ -199,16 +203,38 @@ VideoWidget::VideoWidget(QWidget *parent)
     menuFx->addAction("Hintergrund wiederherstellen", this, [this]
                       {
                           m_bigMap = m_bigMapBackup;
+                          logMessage(QString("Hintergrund wiederhergestellt (%1 Frames)")
+                                         .arg(m_bigMap.size()));
                       });
+
+    QMenu *menuLog = new QMenu("Protokoll", bar);
+    bar->addMenu(menuLog);
+    m_actLog = menuLog->addAction("Protokoll anzeigen");
+    m_actLog->setCheckable(true);
+    m_actLog->setShortcut(QKeySequence("Ctrl+L"));
+    connect(m_actLog, &QAction::toggled, this, &VideoWidget::setLogVisible);
+    menuLog->addAction("Protokoll löschen", this, [this]
+                       {
+                           m_logView->clear();
+                       });
 
     // ── Layout ──
     resize(1000, 680);
     QWidget *central = new QWidget(this);
-    QVBoxLayout *mainLayout = new QVBoxLayout(central);
+    QVBoxLayout *centralLayout = new QVBoxLayout(central);
+    centralLayout->setContentsMargins(0, 0, 0, 0);
+    centralLayout->setSpacing(0);
+
+    // Oberer Teil (Anzeige + Regler) und Protokoll teilen sich den Platz über
+    // einen Trenner, damit die Protokollhöhe nur manuell verändert wird.
+    m_splitter = new QSplitter(Qt::Vertical, central);
+    m_splitter->setChildrenCollapsible(false);
+    QWidget *topPart = new QWidget(m_splitter);
+    QVBoxLayout *mainLayout = new QVBoxLayout(topPart);
     mainLayout->setContentsMargins(2, 2, 2, 2);
     mainLayout->setSpacing(2);
 
-    m_stack = new QStackedWidget(central);
+    m_stack = new QStackedWidget(topPart);
 
     // Page 0: live video/GIF
     m_label = new Label("Zieh ein Video hierher", m_stack);
@@ -245,17 +271,17 @@ VideoWidget::VideoWidget(QWidget *parent)
     // Bottom controls
     QHBoxLayout *ctrlLayout = new QHBoxLayout();
     ctrlLayout->setContentsMargins(4, 0, 4, 4);
-    m_labelLower  = new QLabel("–",   central);
-    m_rangeSlider = new RangeSlider(central, Qt::Horizontal);
-    m_labelUpper  = new QLabel("–",   central);
-    m_labelSort   = new QLabel("–",   central);
-    m_sortSlider  = new QSlider(Qt::Horizontal, central);
+    m_labelLower  = new QLabel("–",   topPart);
+    m_rangeSlider = new RangeSlider(topPart, Qt::Horizontal);
+    m_labelUpper  = new QLabel("–",   topPart);
+    m_labelSort   = new QLabel("–",   topPart);
+    m_sortSlider  = new QSlider(Qt::Horizontal, topPart);
     m_sortSlider->setMaximumWidth(80);
     m_sortSlider->setMinimum(1);
     m_sortSlider->setValue(1);
-    m_labelSpeed  = new QLabel("– ms", central);
-    m_speedSlider = new QSlider(Qt::Horizontal, central);
-    m_revers = new QCheckBox(central);
+    m_labelSpeed  = new QLabel("– ms", topPart);
+    m_speedSlider = new QSlider(Qt::Horizontal, topPart);
+    m_revers = new QCheckBox(topPart);
     m_revers->setText("rev");
     m_revers->setCheckable(true);
     m_revers->setCheckState(Qt::Unchecked);
@@ -275,6 +301,23 @@ VideoWidget::VideoWidget(QWidget *parent)
     ctrlLayout->addWidget(m_speedSlider);
     ctrlLayout->addWidget(m_revers);
     mainLayout->addLayout(ctrlLayout);
+
+    // Protokoll ganz unten – beim Start ausgeblendet
+    m_logView = new QPlainTextEdit(m_splitter);
+    m_logView->setReadOnly(true);
+    m_logView->setMaximumBlockCount(1000);
+    m_logView->setFrameShape(QFrame::StyledPanel);
+    // Umbruch statt horizontaler Scrollleiste, sonst frisst diese eine der Zeilen
+    m_logView->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    // eigene Mindesthöhe, damit der Trenner bis auf eine Zeile herunter darf
+    m_logView->setMinimumHeight(logLinesHeight(1));
+    m_logView->hide();
+
+    m_splitter->addWidget(topPart);
+    m_splitter->addWidget(m_logView);
+    m_splitter->setStretchFactor(0, 1);   // nur der obere Teil wächst mit dem Fenster
+    m_splitter->setStretchFactor(1, 0);
+    centralLayout->addWidget(m_splitter);
 
     setCentralWidget(central);
 
@@ -522,16 +565,34 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
     const int N = qMax(1, frameCount / step);
     m_grid = findOptimalGrid(N);
 
-    const int cellW = m_resolution / m_grid.cols;
-    const int cellH = m_resolution / m_grid.rows;
+    m_previewList.clear();
+    const QRect cropRect = m_label->cropRectInImageCoords();
+
+    int cellW = m_resolution / m_grid.cols;
+    int cellH = m_resolution / m_grid.rows;
+
+    // Einzelbild: kein quadratisches Sheet erzwingen – die längere Seite bekommt
+    // die volle Auflösung, die kürzere wird proportional gekürzt.
+    if (N == 1 && first >= 0 && first < m_bigMap.size())
+    {
+        QSize src = m_bigMap[first].size();
+        if (!cropRect.isEmpty() && cropRect != m_bigMap[first].rect())
+        {
+            src = cropRect.size();
+        }
+        if (!src.isEmpty())
+        {
+            const QSize fit = src.scaled(m_resolution, m_resolution, Qt::KeepAspectRatio);
+            cellW = qMax(1, fit.width());
+            cellH = qMax(1, fit.height());
+        }
+    }
+    m_cellSize = QSize(cellW, cellH);
 
     QPixmap result(m_grid.cols*cellW, m_grid.rows*cellH); // so groß wie nötig, damit alle Frames reinpassen
     result.fill(Qt::transparent);
     QPainter p(&result);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-
-    m_previewList.clear();
-    const QRect cropRect = m_label->cropRectInImageCoords();
 
     for (int i = 0; i < N; ++i)
     {
@@ -597,9 +658,9 @@ void VideoWidget::showFrame(int index)
 void VideoWidget::lowerValueChanged(int value)
 {
     m_labelLower->setText(QString::number(value));
-    if (value >= m_rangeSlider->upperValue())
+    if (value > m_rangeSlider->upperValue())
     {
-        m_rangeSlider->setLowerValue(m_rangeSlider->upperValue() - 1);
+        m_rangeSlider->setLowerValue(m_rangeSlider->upperValue());
         return;
     }
     m_lastHandle = LowerHandle;
@@ -622,9 +683,9 @@ void VideoWidget::lowerValueChanged(int value)
 void VideoWidget::upperValueChanged(int value)
 {
     m_labelUpper->setText(QString::number(value));
-    if (value <= m_rangeSlider->lowerValue())
+    if (value < m_rangeSlider->lowerValue())
     {
-        m_rangeSlider->setUpperValue(m_rangeSlider->lowerValue() + 1);
+        m_rangeSlider->setUpperValue(m_rangeSlider->lowerValue());
         return;
     }
     m_lastHandle = UpperHandle;
@@ -674,12 +735,13 @@ void VideoWidget::previewTick()
     if (m_previewList.isEmpty()) return;
     m_previewIndex = (m_previewIndex + 1) % m_previewList.size();
 
-    const int cellW = m_resolution / m_grid.cols;
-    const int cellH = m_resolution / m_grid.rows;
+    const QSize cell = m_cellSize.isEmpty()
+                           ? QSize(m_resolution / m_grid.cols, m_resolution / m_grid.rows)
+                           : m_cellSize;
 
     // Scale to actual sprite-sheet cell size (= real quality in SL texture)
     const QPixmap cellSized = m_previewList[m_previewIndex].scaled(
-        cellW, cellH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        cell, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 
     // Upscale without smoothing → pixelation visible = honest quality preview
     m_previewLabel->setPixmap(cellSized.scaled(
@@ -785,6 +847,7 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
     if (pathAndUrl.isEmpty()) return;
     setLoadingFile(pathAndUrl);
     const QString path=pathAndUrl.split(",").first();
+    logMessage("Geöffnet: " + path);
     resetExportNameForVideo(path); // neues Video → Dateiname-Vorgabe neu setzen
     m_label->setDefaults();
     m_previewTimer.stop();
@@ -861,6 +924,7 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
                 {
                     setWindowTitle("VideoConverter");
                     m_fillingMap = false;
+                    logMessage("Extraktion fehlgeschlagen: " + msg);
                     QMessageBox::warning(this, "Extraktion fehlgeschlagen", msg);
                 });
         m_extractor->extract(path);
@@ -930,7 +994,63 @@ void VideoWidget::updateTitle()
                        .arg(m_bigMap[0].width()).arg(m_bigMap[0].height()));
 }
 
+// ─── Protokoll ───────────────────────────────────────────────────────────────
+
+void VideoWidget::logMessage(const QString &text)
+{
+    if (!m_logView) return;
+    m_logView->appendPlainText(QTime::currentTime().toString("HH:mm:ss") + "  " + text);
+}
+
+// Höhe, die das Protokollfenster für die angegebene Zeilenzahl benötigt
+int VideoWidget::logLinesHeight(int lines) const
+{
+    const QFontMetrics fm(m_logView->font());
+    return lines * fm.lineSpacing()
+           + 2 * int(m_logView->document()->documentMargin())
+           + 2 * m_logView->frameWidth();
+}
+
+void VideoWidget::setLogVisible(bool on)
+{
+    if (on)
+    {
+        if (m_logHeight <= 0)
+        {
+            m_logHeight = logLinesHeight(3);   // beim ersten Öffnen drei Zeilen
+        }
+        m_logView->show();
+        const int rest = m_splitter->height() - m_logHeight - m_splitter->handleWidth();
+        m_splitter->setSizes({qMax(0, rest), m_logHeight});
+    }
+    else
+    {
+        if (m_logView->isVisible() && m_logView->height() > 0)
+        {
+            m_logHeight = m_logView->height();  // Zeilenzahl fürs nächste Öffnen merken
+        }
+        m_logView->hide();
+    }
+}
+
 // ─── Background removal ───────────────────────────────────────────────────────
+
+namespace
+{
+// Kompakte Beschreibung der bearbeiteten Frame-Nummern fürs Protokoll
+QString frameListText(const QList<int> &keys)
+{
+    if (keys.isEmpty()) return "–";
+    if (keys.size() == 1) return QString::number(keys.first());
+    const int step = keys[1] - keys.first();
+    QString range = QString("%1–%2").arg(keys.first()).arg(keys.last());
+    if (step > 1)
+    {
+        range += QString(", Schritt %1").arg(step);
+    }
+    return QString("%1 (%2 Bilder)").arg(range).arg(keys.size());
+}
+} // namespace
 
 void VideoWidget::startBgRemoval()
 {
@@ -960,6 +1080,7 @@ void VideoWidget::startBgRemoval()
             {
                 setWindowTitle("Fehler: " + msg);
                 m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
+                logMessage("Hintergrund entfernen fehlgeschlagen: " + msg);
                 m_bgRemover->deleteLater();
                 m_bgRemover = nullptr;
             });
@@ -968,6 +1089,8 @@ void VideoWidget::startBgRemoval()
     const QString model = checkedModel ? checkedModel->text() : "ZhengPeng7/BiRefNet";
     const QAction *checkedNode = m_nodeGroup->checkedAction();
     const QString nodeType = checkedNode ? checkedNode->text() : "BiRefNet_Hugo";
+    logMessage(QString("Hintergrund entfernen: Modell %1 (%2), Frames %3")
+                   .arg(model, nodeType, frameListText(toProcess.keys())));
     m_bgRemover->process(toProcess, model, nodeType);
 }
 
@@ -992,6 +1115,7 @@ void VideoWidget::onBgFinished()
 {
     setWindowTitle("VideoConverter");
     m_actBgRemove->setText("Hintergrund entfernen (ComfyUI)");
+    logMessage("Hintergrund entfernen fertig");
     m_bgRemover->deleteLater();
     m_bgRemover = nullptr;
     if (m_showingGrid)
@@ -1356,12 +1480,13 @@ void VideoWidget::saveVideo(const QString &path)
                 setWindowTitle("VideoConverter");
                 addToExportHistory(out); // nur exportierte Videos merken (kein PNG)
                 exporter->deleteLater();
-                QMessageBox::information(this, "Export fertig", "Gespeichert:\n" + out);
+                logMessage("Exportiert: " + out);
             });
     connect(exporter, &VideoExporter::error, this, [this, exporter](const QString &msg)
             {
                 setWindowTitle("VideoConverter");
                 exporter->deleteLater();
+                logMessage("Export fehlgeschlagen: " + msg);
                 QMessageBox::warning(this, "Export-Fehler", msg);
             });
 
@@ -1379,11 +1504,12 @@ void VideoWidget::saveSpriteSheet(const QString &path)
         // QSettings().setValue("save/dir", QFileInfo(path).absolutePath());
         // addToExported(path);
         // addToHistory(QFileInfo(path).absolutePath());
-        QMessageBox::information(this, "Export fertig", "Gespeichert:\n" + path);
+        logMessage("Exportiert: " + pathExt);
     }
     else
     {
-        QMessageBox::warning(this, "Export-Fehler", "Konnte nicht speichern:\n" + path);
+        logMessage("Export fehlgeschlagen: " + pathExt);
+        QMessageBox::warning(this, "Export-Fehler", "Konnte nicht speichern:\n" + pathExt);
         return;
     }
 }

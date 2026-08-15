@@ -96,12 +96,12 @@ void RangeSlider::mousePressEvent(QMouseEvent* ev) {
         {
             if(ev->pos().x() < middle)
             {
-                if((lowerValue()+1)<upperValue()) setLowerValue(lowerValue()+1);
+                if((lowerValue()+1)<=upperValue()) setLowerValue(lowerValue()+1);
             } else
             {
                 if(ev->pos().x() < upperRect.left())
                 {
-                    if((upperValue()-1)>lowerValue()) setUpperValue(upperValue()-1);
+                    if((upperValue()-1)>=lowerValue()) setUpperValue(upperValue()-1);
                 } else
                 {
                     if(ev->pos().x() < upperRect.right())

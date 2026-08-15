@@ -21,6 +21,8 @@ class QStackedWidget;
 class ComfyBgRemover;
 class VideoExporter;
 class FrameExtractor;
+class QPlainTextEdit;
+class QSplitter;
 
 class VideoWidget : public QMainWindow
 {
@@ -86,6 +88,15 @@ private:
     // Frame extraction
     FrameExtractor *m_extractor = nullptr;
 
+    // Protokollfenster (unten, per Trenner in der Höhe verstellbar)
+    QSplitter      *m_splitter  = nullptr;
+    QPlainTextEdit *m_logView   = nullptr;
+    QAction        *m_actLog    = nullptr;
+    int             m_logHeight = 0;   // gemerkte Höhe; nur zur Laufzeit, nicht persistent
+    void logMessage(const QString &text);
+    void setLogVisible(bool on);
+    int  logLinesHeight(int lines) const;
+
     // File history
     QMenu   *m_recentMenu   = nullptr;   // Zuletzt geöffnet
     QMenu   *m_exportMenu   = nullptr;   // Zuletzt exportiert (nur Videos, kein PNG)
@@ -123,6 +134,7 @@ private:
     struct GridDims { int cols, rows; };
     GridDims findOptimalGrid(int N) const;
     GridDims m_grid = {1,1};
+    QSize    m_cellSize;   // Zellgröße des zuletzt gebauten Grids (Einzelbild: proportional)
     struct Sliders { int first, last, step; };
     const Sliders getSliderValues() const;
     QPixmap composeGrid(int first, int count, int step);

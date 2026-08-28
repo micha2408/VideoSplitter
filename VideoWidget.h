@@ -130,6 +130,9 @@ private:
     {
         QSettings().setValue("loadingFile", path);
     }
+    // Seitenverhaeltnis des Einzelbild-Exports (Reihenfolge = Reihenfolge im Dialog)
+    enum Ratio { RatioOriginal = 0, Ratio4_3, Ratio3_4, Ratio1_1 };
+
     // Grid helpers
     struct GridDims { int cols, rows; };
     GridDims findOptimalGrid(int N) const;
@@ -142,11 +145,23 @@ private:
     int exportFrameCount() const;
     // Vorgabename im Subordner-Modus: "video"/"picture" + 8-stelliger Hash
     QString exportDefaultName() const;
-    // Tatsächlicher Sprite-Sheet-Dateiname inkl. (cols_rows_frames_fps)-Zusatz
-    QString spriteFileName(const QString &pngPath) const;
+    // Tatsächlicher Sprite-Sheet-Dateiname inkl. (cols_rows_frames_fps)-Zusatz,
+    // beim Einzelbild stattdessen mit _BreitexHoehe der tatsächlichen Ausgabe
+    QString spriteFileName(const QString &pngPath, Ratio ratio = RatioOriginal) const;
     // Liste der bereits existierenden Zieldateien der gewählten Formate
     QStringList existingExportTargets(const QString &dir, const QString &base,
-                                      bool webm, bool mp4, bool gif, bool png) const;
+                                      bool webm, bool mp4, bool gif, bool png,
+                                      Ratio ratio = RatioOriginal) const;
+    // Sollgröße eines Seitenverhältnisses bei der aktuellen Auflösung
+    QSize ratioTargetSize(Ratio ratio) const;
+    // Größe des zu exportierenden Einzelbildes (Original = proportional skaliert)
+    QSize exportImageSize(Ratio ratio) const;
+    // Maße des exportierten Einzelframes nach Anwendung des Crop-Rechtecks
+    QSize singleFrameSourceSize() const;
+    // Mindestens 10 Pixel mit Alpha < 32?
+    static bool hasTransparency(const QImage &img);
+    // Proportional in die Zielbox skalieren und den Rest auffüllen
+    QPixmap padToRatio(const QPixmap &src, Ratio ratio) const;
     void paintGrid();
     void startPlayback();
     void updateTitle();
@@ -167,11 +182,12 @@ private slots:
     void onBgProgress(int done, int total);
     void onBgFinished();
     void openFile();
-    void saveSpriteSheet(const QString &path);
+    void saveSpriteSheet(const QString &path, Ratio ratio = RatioOriginal);
     void saveVideo(const QString &path);
     void exportDialog();
     void runExport(const QString &dir, const QString &baseName,
-                   bool webm, bool mp4, bool gif, bool png);
+                   bool webm, bool mp4, bool gif, bool png,
+                   Ratio ratio = RatioOriginal);
     void openWithExplorer();
     void openWithUrl();
     void openWithXnView();

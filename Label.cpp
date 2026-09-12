@@ -2,6 +2,10 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QRadioButton>
+#include <QVBoxLayout>
 
 void Label::mousePressEvent(QMouseEvent *ev)
 {
@@ -19,8 +23,15 @@ void Label::mousePressEvent(QMouseEvent *ev)
     }
     if (!rubberBand)
         rubberBand = new QRubberBand(QRubberBand::Rectangle, this);
-    m_cropState     = CropState::None;
+    m_cropState       = CropState::None;
+    // Stand fuer "Abbrechen" im Auswahldialog merken
+    m_cropBeforeClick = m_imageCropRect;
+    m_padBeforeClick  = m_padRatio;
+    // Waehrend des Aufziehens das unveraenderte Bild zeigen, sonst wuerde die
+    // Auswahl gegen ein bereits zugeschnittenes/erweitertes Bild gemessen.
     m_imageCropRect = QRect();
+    m_padRatio      = QSize();
+    emit cropChanged();
     rubberBand->setGeometry(QRect(origin, QSize()));
     rubberBand->show();
 }
@@ -91,10 +102,9 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
         m_newSel = QRect(origin, ev->pos()).normalized();
         if (m_newSel.width() < 8 || m_newSel.height() < 8)
         {
-            m_imageCropRect = QRect();
-            m_newSel        = QRect();
-            update();
-            emit cropChanged();
+            // Klick ohne Aufziehen: Grundstellung oder festes Seitenverhaeltnis waehlen
+            m_newSel = QRect();
+            showRatioDialog(mapToGlobal(ev->pos()));
             return;
         }
     }
@@ -114,6 +124,79 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
             static_cast<int>(sel.height() * sh)
         ).intersected(imagePlus.image.rect());
     }
+    update();
+    emit cropChanged();
+}
+
+// Auswahl nach einem einfachen Linksklick: Grundstellung oder ein festes
+// Seitenverhaeltnis, auf das das Bild erweitert wird. [Abbrechen] aendert nichts.
+void Label::showRatioDialog(const QPoint &globalPos)
+{
+    if (imagePlus.image.isNull())
+    {
+        restoreBeforeClick();
+        return;
+    }
+    struct Entry { const char *text; QSize ratio; };
+    const Entry entries[] = {
+        { "Grundstellung", QSize()      },
+        { "16:9",          QSize(16, 9) },
+        { "9:16",          QSize(9, 16) },
+        { "4:3",           QSize(4, 3)  },
+        { "3:4",           QSize(3, 4)  },
+        { "1:1",           QSize(1, 1)  },
+    };
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Seitenverhältnis"));
+    QVBoxLayout *lay = new QVBoxLayout(&dlg);
+    QList<QRadioButton *> buttons;
+    for (const Entry &e : entries)
+    {
+        QRadioButton *rb = new QRadioButton(tr(e.text), &dlg);
+        rb->setChecked(e.ratio == m_padRatio);
+        buttons << rb;
+        lay->addWidget(rb);
+    }
+    QDialogButtonBox *box = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    lay->addWidget(box);
+    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    dlg.move(globalPos);
+
+    if (dlg.exec() != QDialog::Accepted)
+    {
+        restoreBeforeClick();           // Abbruch: nichts aendern
+        return;
+    }
+
+    m_imageCropRect = m_cropBeforeClick;   // ein vorhandener Zuschnitt bleibt erhalten
+    for (int i = 0; i < buttons.size(); ++i)
+    {
+        if (!buttons[i]->isChecked())
+        {
+            continue;
+        }
+        m_padRatio = entries[i].ratio;
+        if (m_padRatio.isEmpty())
+        {
+            // Grundstellung: weder Zuschnitt noch Erweiterung
+            m_imageCropRect = QRect();
+            m_newSel        = QRect();
+        }
+        break;
+    }
+    update();
+    emit cropChanged();
+}
+
+// mousePressEvent() loescht Zuschnitt und Erweiterung schon beim Druecken der
+// Taste. Wird der Dialog abgebrochen, muss dieser Stand zurueck.
+void Label::restoreBeforeClick()
+{
+    m_imageCropRect = m_cropBeforeClick;
+    m_padRatio      = m_padBeforeClick;
     update();
     emit cropChanged();
 }

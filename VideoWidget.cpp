@@ -517,14 +517,7 @@ void VideoWidget::playTick()
         m_playIndex = sliders.first;
     }
 
-    const QRect cropRect = m_label->cropRectInImageCoords();
-
-    QPixmap px = m_bigMap[m_playIndex];
-    if(cropRect.isValid())
-    {
-        px = px.copy(cropRect);
-    }
-    m_label->setImage(px, m_playIndex, m_bigMap.size(), m_delay);
+    m_label->setImage(preparedFrame(m_playIndex), m_playIndex, m_bigMap.size(), m_delay);
     m_label->update();
 
     m_rangeSlider->setValue(m_playIndex);   // blauen Balken mit Wiedergabe mitlaufen lassen
@@ -568,7 +561,6 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
     m_grid = findOptimalGrid(N);
 
     m_previewList.clear();
-    const QRect cropRect = m_label->cropRectInImageCoords();
 
     int cellW = m_resolution / m_grid.cols;
     int cellH = m_resolution / m_grid.rows;
@@ -577,11 +569,7 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
     // die volle Auflösung, die kürzere wird proportional gekürzt.
     if (N == 1 && first >= 0 && first < m_bigMap.size())
     {
-        QSize src = m_bigMap[first].size();
-        if (!cropRect.isEmpty() && cropRect != m_bigMap[first].rect())
-        {
-            src = cropRect.size();
-        }
+        const QSize src = preparedFrameSize(first);
         if (!src.isEmpty())
         {
             const QSize fit = src.scaled(m_resolution, m_resolution, Qt::KeepAspectRatio);
@@ -601,11 +589,8 @@ QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
         const int key = first + i * step;
         if (key < 0 || key >= m_bigMap.size()) continue;
 
-        // Apply crop if one is set
-        QPixmap src = m_bigMap[key];
-        if (!cropRect.isEmpty() && cropRect != src.rect())
-            src = src.copy(cropRect);
-
+        // Zuschnitt und Seitenverhältnis anwenden
+        const QPixmap src = preparedFrame(key);
         m_previewList << src;
 
         const int row = i / m_grid.cols;
@@ -650,10 +635,7 @@ void VideoWidget::paintGrid()
 void VideoWidget::showFrame(int index)
 {
     if (index < 0 || index >= m_bigMap.size()) return;
-    QPixmap px = m_bigMap[index];
-    const QRect cr = m_label->cropRectInImageCoords();
-    if (!cr.isEmpty() && cr != px.rect()) px = px.copy(cr);
-    m_label->setImage(px, index, m_bigMap.size(), m_delay);
+    m_label->setImage(preparedFrame(index), index, m_bigMap.size(), m_delay);
     m_label->update();
 }
 
@@ -852,6 +834,7 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
     logMessage("Geöffnet: " + path);
     resetExportNameForVideo(path); // neues Video → Dateiname-Vorgabe neu setzen
     m_label->setDefaults();
+    m_alphaCache.clear();
     m_previewTimer.stop();
     m_playTimer.stop();
     if (m_extractor) { m_extractor->cancel(); m_extractor->deleteLater(); m_extractor = nullptr; }
@@ -1127,7 +1110,7 @@ void VideoWidget::onBgFrameReady(int index, QPixmap result)
     // Show current frame live if it's visible
     if (!m_showingGrid && m_label->currentIndex() == index)
     {
-        m_label->setImage(result, index, m_bigMap.size(), m_delay);
+        m_label->setImage(preparedFrame(index), index, m_bigMap.size(), m_delay);
         m_label->update();
     }
 }
@@ -1151,7 +1134,7 @@ void VideoWidget::onBgFinished()
         const int cur = m_rangeSlider->lowerValue();
         if (cur >= 0 && cur < m_bigMap.size())
         {
-            m_label->setImage(m_bigMap[cur], cur, m_bigMap.size(), m_delay);
+            m_label->setImage(preparedFrame(cur), cur, m_bigMap.size(), m_delay);
             m_label->update();
         }
     }
@@ -1695,15 +1678,7 @@ QSize VideoWidget::ratioTargetSize(Ratio ratio) const
 QSize VideoWidget::sourceFrameSize() const
 {
     const auto sliders = getSliderValues();
-    const int first = sliders.first;
-    if (first < 0 || first >= m_bigMap.size()) return QSize();
-
-    const QRect cropRect = m_label->cropRectInImageCoords();
-    if (!cropRect.isEmpty() && cropRect != m_bigMap[first].rect())
-    {
-        return cropRect.size();
-    }
-    return m_bigMap[first].size();
+    return preparedFrameSize(sliders.first);
 }
 
 // Größe der Einzelbild-Ausgabe. Bei "Original" wird nur proportional skaliert,
@@ -1742,20 +1717,12 @@ bool VideoWidget::hasTransparency(const QImage &img)
     return false;
 }
 
-// Skaliert die Quelle proportional in die Zielbox und füllt den verbleibenden
-// Rand oben/unten bzw. links/rechts auf: transparent, wenn die Quelle selbst
-// nennenswert transparent ist, sonst durch Wiederholen der äußersten Zeile
-// bzw. Spalte. Die Proportionen des Bildes bleiben dabei unverändert.
-QPixmap VideoWidget::padToRatio(const QPixmap &src, Ratio ratio) const
+// Legt "fitted" mittig in eine Box der Größe "target" und füllt den Rand auf:
+// transparent, wenn die Quelle selbst nennenswert transparent ist, sonst durch
+// Wiederholen der äußersten Zeile bzw. Spalte.
+QImage VideoWidget::padCentered(const QImage &fitted, const QSize &target,
+                                bool transparentFill)
 {
-    const QSize target = ratioTargetSize(ratio);
-    if (src.isNull() || target.isEmpty()) return src;
-
-    const QImage source = src.toImage();
-    const QImage fitted = source.scaled(target, Qt::KeepAspectRatio,
-                                        Qt::SmoothTransformation);
-    if (fitted.isNull()) return src;
-
     QImage out(target, QImage::Format_ARGB32);
     out.fill(Qt::transparent);
 
@@ -1767,7 +1734,7 @@ QPixmap VideoWidget::padToRatio(const QPixmap &src, Ratio ratio) const
     const int padRight  = target.width()  - fitted.width()  - x0;
 
     QPainter p(&out);
-    if (!hasTransparency(source))
+    if (!transparentFill)
     {
         // Randzeile/-spalte über den jeweiligen Zusatzbereich strecken
         if (padTop > 0)
@@ -1794,7 +1761,88 @@ QPixmap VideoWidget::padToRatio(const QPixmap &src, Ratio ratio) const
     p.drawImage(x0, y0, fitted);
     p.end();
 
-    return QPixmap::fromImage(out);
+    return out;
+}
+
+// Skaliert die Quelle proportional in die Zielbox und füllt den verbleibenden
+// Rand oben/unten bzw. links/rechts auf. Die Proportionen des Bildes bleiben
+// dabei unverändert.
+QPixmap VideoWidget::padToRatio(const QPixmap &src, Ratio ratio) const
+{
+    const QSize target = ratioTargetSize(ratio);
+    if (src.isNull() || target.isEmpty()) return src;
+
+    const QImage source = src.toImage();
+    const QImage fitted = source.scaled(target, Qt::KeepAspectRatio,
+                                        Qt::SmoothTransformation);
+    if (fitted.isNull()) return src;
+
+    return QPixmap::fromImage(padCentered(fitted, target, hasTransparency(source)));
+}
+
+// Erweitert das Bild auf das gewählte Seitenverhältnis, ohne die vorhandenen
+// Pixel zu skalieren: es wird ausschließlich außen aufgefüllt.
+QPixmap VideoWidget::expandToRatio(const QPixmap &src, const QSize &ratio,
+                                   bool transparentFill) const
+{
+    if (src.isNull() || ratio.isEmpty()) return src;
+
+    // Kleinste Box mit dem Zielverhältnis, die das Bild vollständig enthält
+    const QSize target = ratio.scaled(src.size(), Qt::KeepAspectRatioByExpanding);
+    if (target.isEmpty() || target == src.size()) return src;
+
+    const QImage source = src.toImage();
+    return QPixmap::fromImage(padCentered(source, target, transparentFill));
+}
+
+// Die Transparenz-Prüfung läuft über das ganze Bild, deshalb wird das Ergebnis
+// je Quellframe gemerkt. Der cacheKey() ändert sich, sobald der Frame ersetzt
+// wird (z. B. durch "Hintergrund entfernen").
+bool VideoWidget::frameHasTransparency(int index) const
+{
+    if (index < 0 || index >= m_bigMap.size()) return false;
+
+    const qint64 key = m_bigMap[index].cacheKey();
+    const auto it = m_alphaCache.constFind(key);
+    if (it != m_alphaCache.constEnd()) return *it;
+
+    const bool has = hasTransparency(m_bigMap[index].toImage());
+    m_alphaCache.insert(key, has);
+    return has;
+}
+
+// Ein Quellframe so, wie er angezeigt und exportiert wird: erst der Zuschnitt
+// aus dem rubberBand, dann die Erweiterung auf das gewählte Seitenverhältnis.
+QPixmap VideoWidget::preparedFrame(int index) const
+{
+    if (index < 0 || index >= m_bigMap.size()) return QPixmap();
+
+    QPixmap px = m_bigMap[index];
+    const QRect cropRect = m_label->cropRectInImageCoords();
+    if (!cropRect.isEmpty() && cropRect != px.rect())
+    {
+        px = px.copy(cropRect);
+    }
+    return expandToRatio(px, m_label->padRatio(), frameHasTransparency(index));
+}
+
+// Gleiche Rechnung wie preparedFrame(), nur auf den Maßen
+QSize VideoWidget::preparedFrameSize(int index) const
+{
+    if (index < 0 || index >= m_bigMap.size()) return QSize();
+
+    QSize sz = m_bigMap[index].size();
+    const QRect cropRect = m_label->cropRectInImageCoords();
+    if (!cropRect.isEmpty() && cropRect != m_bigMap[index].rect())
+    {
+        sz = cropRect.size();
+    }
+    const QSize ratio = m_label->padRatio();
+    if (!ratio.isEmpty() && !sz.isEmpty())
+    {
+        sz = ratio.scaled(sz, Qt::KeepAspectRatioByExpanding);
+    }
+    return sz;
 }
 
 QStringList VideoWidget::existingExportTargets(const QString &dir, const QString &base,
@@ -1832,19 +1880,15 @@ void VideoWidget::saveVideo(const QString &path)
         return;
     }
 
-    // Collect frames in slider range with step + crop applied
-
-    const QRect cropRect = m_label->cropRectInImageCoords();
+    // Frames im Sliderbereich einsammeln, mit Schrittweite, Zuschnitt und
+    // Seitenverhältnis-Erweiterung
 
     QMap<int, QPixmap> toExport;
     int idx = 0;
     for (int i = sliders.first; i <= sliders.last; i += sliders.step)
     {
         if (i < 0 || i >= m_bigMap.size()) continue;
-        QPixmap px = m_bigMap[i];
-        if (!cropRect.isEmpty() && cropRect != px.rect())
-            px = px.copy(cropRect);
-        toExport[idx++] = px;
+        toExport[idx++] = preparedFrame(i);
     }
     if (toExport.isEmpty()) return;
 
@@ -1880,13 +1924,7 @@ void VideoWidget::saveSpriteSheet(const QString &path, Ratio ratio)
         && sliders.first >= 0 && sliders.first < m_bigMap.size())
     {
         // Einzelbild auf ein festes Seitenverhältnis erweitern
-        QPixmap src = m_bigMap[sliders.first];
-        const QRect cropRect = m_label->cropRectInImageCoords();
-        if (!cropRect.isEmpty() && cropRect != src.rect())
-        {
-            src = src.copy(cropRect);
-        }
-        grid = padToRatio(src, ratio);
+        grid = padToRatio(preparedFrame(sliders.first), ratio);
     }
     else
     {

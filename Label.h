@@ -2,6 +2,7 @@
 #define LABEL_H
 
 #include <QRect>
+#include <QSize>
 #include <QObject>
 #include <QLabel>
 #include <QRubberBand>
@@ -22,6 +23,9 @@ public:
     }
     int currentIndex() const { return imagePlus.index; }
 
+    // Seitenverhaeltnis, auf das das Bild erweitert wird (leer = Grundstellung)
+    QSize padRatio() const { return m_padRatio; }
+
     QRect cropRectInImageCoords() const
     {
         return m_cropState != CropState::None ? QRect() : m_imageCropRect;
@@ -33,8 +37,11 @@ public:
         origin=QPoint();
         m_cropState = CropState::None;
         m_imageCropRect=QRect();
+        m_cropBeforeClick=QRect();
+        m_padBeforeClick=QSize();
         m_newSel=QRect();
         m_lastPos=QPointF();
+        m_padRatio=QSize();
         imagePlus = ImagePlus();
     }
 protected:
@@ -44,6 +51,8 @@ protected:
     void keyPressEvent(QKeyEvent *ev) override;
     void paintEvent(QPaintEvent *ev) override;
 private:
+    void showRatioDialog(const QPoint &globalPos);
+    void restoreBeforeClick();
     struct ImagePlus
     {
         ImagePlus(){}
@@ -63,8 +72,11 @@ private:
     QPoint origin;
     CropState m_cropState = CropState::None;
     QRect m_imageCropRect;
+    QRect m_cropBeforeClick;
+    QSize m_padBeforeClick;
     QRect m_newSel;
     QPointF m_lastPos;
+    QSize m_padRatio;
     bool m_didDrag = false;
 signals:
     void sendPic(Label *l);

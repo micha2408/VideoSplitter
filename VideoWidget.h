@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QMap>
+#include <QHash>
 #include <QVector>
 #include <QTimer>
 #include <QList>
@@ -46,6 +47,8 @@ private:
     // All captured frames (contiguous, index 0..size()-1)
     QVector<QPixmap> m_bigMap;
     QVector<QPixmap> m_bigMapBackup;
+    // Transparenz-Prüfung je Frame, gemerkt über QPixmap::cacheKey()
+    mutable QHash<qint64, bool> m_alphaCache;
     int  m_delay      = 0;
     bool m_fillingMap = false;
 
@@ -193,6 +196,18 @@ private:
     static bool hasTransparency(const QImage &img);
     // Proportional in die Zielbox skalieren und den Rest auffüllen
     QPixmap padToRatio(const QPixmap &src, Ratio ratio) const;
+    // Bild zentriert in eine Box legen und den Rand auffüllen
+    static QImage padCentered(const QImage &fitted, const QSize &target,
+                              bool transparentFill);
+    // Ohne zu skalieren auf ein Seitenverhältnis erweitern (Label-Auswahl)
+    QPixmap expandToRatio(const QPixmap &src, const QSize &ratio,
+                          bool transparentFill) const;
+    // Enthält der Quellframe transparente Pixel? (Ergebnis wird gemerkt)
+    bool frameHasTransparency(int index) const;
+    // Quellframe mit Zuschnitt und Seitenverhältnis-Erweiterung
+    QPixmap preparedFrame(int index) const;
+    // Maße, die preparedFrame() liefern würde – ohne das Bild zu bauen
+    QSize preparedFrameSize(int index) const;
     void paintGrid();
     void startPlayback();
     void updateTitle();

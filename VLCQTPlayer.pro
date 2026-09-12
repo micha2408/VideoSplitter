@@ -11,7 +11,8 @@ SOURCES += \
     VideoWidget.cpp \
     ComfyBgRemover.cpp \
     VideoExporter.cpp \
-    FrameExtractor.cpp
+    FrameExtractor.cpp \
+    SpriteImportDialog.cpp
 
 HEADERS += \
     Label.h \
@@ -19,4 +20,5 @@ HEADERS += \
     VideoWidget.h \
     ComfyBgRemover.h \
     VideoExporter.h \
-    FrameExtractor.h
+    FrameExtractor.h \
+    SpriteImportDialog.h

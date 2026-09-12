@@ -4,6 +4,7 @@
 #include "ComfyBgRemover.h"
 #include "VideoExporter.h"
 #include "FrameExtractor.h"
+#include "SpriteImportDialog.h"
 
 #include <QDragEnterEvent>
 #include <QMimeData>
@@ -908,6 +909,30 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
             px.load(path);
         }
         if (px.isNull()) return;
+
+        // Sprite-Sheet aus einem frueheren Export? Dann wieder in Frames zerlegen.
+        SpriteInfo info;
+        if (parseSpriteFileName(path, info))
+        {
+            const QSize frameSize = resolveSpriteFrameSize(px, info);
+            const QVector<QPixmap> frames = frameSize.isEmpty()
+                                                ? QVector<QPixmap>()
+                                                : sliceSpriteSheet(px, info, frameSize);
+            if (!frames.isEmpty())
+            {
+                logMessage(QString("Sprite-Sheet erkannt: %1×%2-Raster, %3 Frames, %4 fps, "
+                                   "Originalgröße %5×%6 (%7)")
+                               .arg(info.cols).arg(info.rows).arg(frames.size()).arg(info.fps)
+                               .arg(frameSize.width()).arg(frameSize.height())
+                               .arg(info.hasSourceSize() ? "aus dem Dateinamen"
+                                                         : "im Dialog festgelegt"));
+                onFramesExtracted(frames, info.fps > 0 ? qRound(1000.0 / info.fps) : 40);
+                return;
+            }
+            logMessage("Sprite-Sheet nicht zerlegt (abgebrochen oder Raster passt "
+                       "nicht zum Bild) – wird als Einzelbild geladen.");
+        }
+
         onFramesExtracted({px}, 40);
     }
     else
@@ -1426,7 +1451,9 @@ void VideoWidget::runExport(const QString &dir, const QString &baseName,
                             bool webm, bool mp4, bool gif, bool png, Ratio ratio)
 {
     QDir().mkpath(dir);
-    const QString stem = dir + "/" + baseName;
+    // Eine aus einem importierten Sheet stammende Parameterliste faellt weg;
+    // saveSpriteSheet() haengt fuer PNG anschliessend die aktuelle an.
+    const QString stem = stripExportSuffix(dir + "/" + baseName);
     if (webm) saveVideo(stem + ".webm");
     if (mp4)  saveVideo(stem + ".mp4");
     if (gif)  saveVideo(stem + ".gif");
@@ -1458,15 +1485,46 @@ QString VideoWidget::exportDefaultName() const
            + "_" + hash;
 }
 
+// Entfernt am Ende des Namens eine bereits vorhandene Parameterliste
+// "(cols_rows_frames_fps)" bzw. "(cols_rows_frames_fps_breite_hoehe)" oder eine
+// Groessenangabe "_BreitexHoehe". Beim erneuten Export eines importierten Sheets
+// wird die alte Liste dadurch ersetzt und haengt sich nicht ein zweites Mal an.
+QString VideoWidget::stripExportSuffix(const QString &stem)
+{
+    static const QRegularExpression listRe(
+        R"(\(\d+_\d+_\d+_\d+(?:_\d+_\d+)?\)$)");
+    // Mindestens zweistellig, damit harmlose Namen wie "clip_2x3" stehen bleiben
+    static const QRegularExpression sizeRe(R"(_\d{2,}x\d{2,}$)");
+
+    QString out = stem;
+    // Mehrfach anwenden: aeltere Namen koennen beides hintereinander tragen
+    forever
+    {
+        const int before = out.size();
+        out.remove(listRe);
+        out.remove(sizeRe);
+        if (out.size() == before)
+        {
+            return out;
+        }
+    }
+}
+
 QString VideoWidget::spriteFileName(const QString &pngPath, Ratio ratio) const
 {
+    // Auf dem Namen ohne Endung arbeiten und eine alte Parameterliste verwerfen
+    QString stem = pngPath;
+    if (stem.endsWith(".png", Qt::CaseInsensitive))
+    {
+        stem.chop(4);
+    }
+    stem = stripExportSuffix(stem);
+
     if (exportFrameCount() <= 1)
     {
         // Einzelbild → tatsächliche Ausgabegröße an den Namen hängen
         const QSize sz = exportImageSize(ratio);
-        QString out(pngPath);
-        out.replace(".png", QString("_%1x%2.png").arg(sz.width()).arg(sz.height()));
-        return out;
+        return stem + QString("_%1x%2.png").arg(sz.width()).arg(sz.height());
     }
 
     auto sliders = getSliderValues();
@@ -1480,10 +1538,140 @@ QString VideoWidget::spriteFileName(const QString &pngPath, Ratio ratio) const
         if (key >= 0 && key < m_bigMap.size()) ++frames;
     }
     const double fps = m_delay > 0 ? 1000.0 / (m_delay * sliders.step) : 25.0;
-    QString out(pngPath);
-    out.replace(".png", QString("(%1_%2_%3_%4).png")
-                    .arg(g.cols).arg(g.rows).arg(frames).arg(int(fps)));
-    return out;
+    const QSize  src = sourceFrameSize();
+    return stem + QString("(%1_%2_%3_%4_%5_%6).png")
+                      .arg(g.cols).arg(g.rows).arg(frames).arg(int(fps))
+                      .arg(src.width()).arg(src.height());
+}
+
+// ─── Sprite-Sheet-Import ─────────────────────────────────────────────────────
+
+// Erkennt den vom Export angehaengten Zusatz vor der Endung. Aktuell schreibt
+// der Export sechs Parameter "(cols_rows_frames_fps_breite_hoehe)"; aeltere
+// Dateien haben nur die ersten vier, dann bleiben srcW/srcH auf 0 und die
+// Originalgroesse muss beim Import erfragt werden.
+bool VideoWidget::parseSpriteFileName(const QString &path, SpriteInfo &info)
+{
+    // Bei URLs stoert alles ab "?" nur; der Dateiname steht davor.
+    QString name = path;
+    const int query = name.indexOf('?');
+    if (query >= 0)
+    {
+        name = name.left(query);
+    }
+    name = QFileInfo(name).fileName();
+
+    static const QRegularExpression re(
+        R"(\((\d+)_(\d+)_(\d+)_(\d+)(?:_(\d+)_(\d+))?\)\.[^.]+$)");
+    const QRegularExpressionMatch m = re.match(name);
+    if (!m.hasMatch())
+    {
+        return false;
+    }
+
+    info.cols   = m.captured(1).toInt();
+    info.rows   = m.captured(2).toInt();
+    info.frames = m.captured(3).toInt();
+    info.fps    = m.captured(4).toInt();
+    info.srcW   = m.captured(5).toInt();   // fehlende Gruppe -> leer -> 0
+    info.srcH   = m.captured(6).toInt();
+    return info.cols > 0 && info.rows > 0 && info.frames > 0;
+}
+
+// Lage der Zelle mit dem angegebenen Index im Sheet. Die Kanten werden ueber die
+// Rundung der Nachbarzelle bestimmt, damit zwischen den Zellen keine
+// Pixelspalten oder -zeilen verloren gehen.
+QRect VideoWidget::spriteCellRect(const QPixmap &sheet, const SpriteInfo &info, int index)
+{
+    if (sheet.isNull() || info.cols <= 0 || info.rows <= 0 || index < 0)
+    {
+        return QRect();
+    }
+
+    const double cellW = static_cast<double>(sheet.width())  / info.cols;
+    const double cellH = static_cast<double>(sheet.height()) / info.rows;
+    if (cellW < 1.0 || cellH < 1.0)
+    {
+        return QRect();   // Sheet passt nicht zum angegebenen Raster
+    }
+
+    const int col = index % info.cols;
+    const int row = index / info.cols;
+    const int x0  = qRound(col * cellW);
+    const int y0  = qRound(row * cellH);
+    const QRect cell(x0, y0,
+                     qRound((col + 1) * cellW) - x0,
+                     qRound((row + 1) * cellH) - y0);
+    return cell.intersected(sheet.rect());
+}
+
+// Seitenverhaeltnis der Sheet-Zelle, hochgerechnet auf eine lange Seite von
+// kSpriteImportLongSide. Das ist nur der Startwert des Nachfrage-Dialogs:
+// composeGrid() presst die Frames mit IgnoreAspectRatio in Zellen, deren Form
+// allein aus dem Raster stammt, die Originalproportionen stecken also nicht im
+// Bild. Bei Dateien mit sechs Parametern wird der Wert gar nicht erst gebraucht.
+QSize VideoWidget::spriteCellSuggestion(const QSize &cell)
+{
+    if (cell.isEmpty())
+    {
+        return QSize(kSpriteImportLongSide, kSpriteImportLongSide);
+    }
+
+    const double longSide = qMax(cell.width(), cell.height());
+    const double factor   = kSpriteImportLongSide / longSide;
+    return QSize(qMax(1, qRound(cell.width()  * factor)),
+                 qMax(1, qRound(cell.height() * factor)));
+}
+
+// Zerlegt das Sheet zeilenweise (wie composeGrid() es gefuellt hat) in die
+// ersten info.frames Zellen und zieht jede auf die Originalgroesse zurueck.
+QVector<QPixmap> VideoWidget::sliceSpriteSheet(const QPixmap &sheet, const SpriteInfo &info,
+                                               const QSize &frameSize)
+{
+    QVector<QPixmap> frames;
+    if (frameSize.isEmpty() || spriteCellRect(sheet, info, 0).isEmpty())
+    {
+        return frames;
+    }
+
+    const int count = qBound(1, info.frames, info.cols * info.rows);
+    frames.reserve(count);
+
+    for (int i = 0; i < count; ++i)
+    {
+        const QPixmap part = sheet.copy(spriteCellRect(sheet, info, i));
+        if (part.isNull())
+        {
+            continue;
+        }
+        frames << part.scaled(frameSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
+    return frames;
+}
+
+// Originalgroesse eines Sprite-Sheet-Frames bestimmen: bei sechs Parametern
+// steht sie im Dateinamen, sonst muss der Benutzer sie im Dialog festlegen.
+// Leere Rueckgabe = abgebrochen.
+QSize VideoWidget::resolveSpriteFrameSize(const QPixmap &sheet, const SpriteInfo &info)
+{
+    if (info.hasSourceSize())
+    {
+        return QSize(info.srcW, info.srcH);
+    }
+
+    const QRect first = spriteCellRect(sheet, info, 0);
+    if (first.isEmpty())
+    {
+        return QSize();
+    }
+
+    SpriteImportDialog dlg(sheet.copy(first), spriteCellSuggestion(first.size()),
+                           qBound(1, info.frames, info.cols * info.rows), this);
+    if (dlg.exec() != QDialog::Accepted)
+    {
+        return QSize();
+    }
+    return dlg.frameSize();
 }
 
 // Sollgröße eines Seitenverhältnisses bei der aktuell gewählten Auflösung:
@@ -1501,8 +1689,10 @@ QSize VideoWidget::ratioTargetSize(Ratio ratio) const
     return QSize(base, base);
 }
 
-// Maße des exportierten Einzelframes, nachdem das Crop-Rechteck angewandt wurde.
-QSize VideoWidget::singleFrameSourceSize() const
+// Maße eines Quellframes, nachdem das Crop-Rechteck angewandt wurde. Genau
+// diese Groesse wird beim Export in die Zellen gepresst und landet als Parameter
+// 5 und 6 im Dateinamen.
+QSize VideoWidget::sourceFrameSize() const
 {
     const auto sliders = getSliderValues();
     const int first = sliders.first;
@@ -1522,7 +1712,7 @@ QSize VideoWidget::exportImageSize(Ratio ratio) const
 {
     if (ratio != RatioOriginal) return ratioTargetSize(ratio);
 
-    const QSize src = singleFrameSourceSize();
+    const QSize src = sourceFrameSize();
     if (src.isEmpty()) return QSize(m_resolution, m_resolution);
 
     const QSize fit = src.scaled(m_resolution, m_resolution, Qt::KeepAspectRatio);
@@ -1612,7 +1802,7 @@ QStringList VideoWidget::existingExportTargets(const QString &dir, const QString
                                                Ratio ratio) const
 {
     QStringList targets;
-    const QString stem = dir + "/" + base;
+    const QString stem = stripExportSuffix(dir + "/" + base);
     if (webm) targets << stem + ".webm";
     if (mp4)  targets << stem + ".mp4";
     if (gif)  targets << stem + ".gif";

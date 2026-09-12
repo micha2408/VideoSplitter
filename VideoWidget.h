@@ -1,4 +1,4 @@
-#ifndef MAINWINDOW_H
+﻿#ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
 #include <QMainWindow>
@@ -133,6 +133,32 @@ private:
     // Seitenverhaeltnis des Einzelbild-Exports (Reihenfolge = Reihenfolge im Dialog)
     enum Ratio { RatioOriginal = 0, Ratio4_3, Ratio3_4, Ratio1_1 };
 
+    // ─── Sprite-Sheet-Import ────────────────────────────────────────────────
+    // Beim Export bekommt ein Sprite-Sheet den Zusatz
+    // "(cols_rows_frames_fps_breite_hoehe)"; Breite und Hoehe sind die Masse des
+    // Ursprungsvideos. Beim Oeffnen wird dieser Zusatz wieder ausgewertet, um aus
+    // dem Sheet die Einzelframes zurueckzugewinnen. Aeltere Dateien tragen nur
+    // die ersten vier Parameter — dann fragt resolveSpriteFrameSize() nach.
+    struct SpriteInfo
+    {
+        int cols = 0, rows = 0, frames = 0, fps = 0;
+        int srcW = 0, srcH = 0;   // 0 = nicht im Dateinamen enthalten
+        bool hasSourceSize() const { return srcW > 0 && srcH > 0; }
+    };
+    // Vorgabe fuer die lange Seite, wenn die Originalgroesse geschaetzt wird
+    static constexpr int kSpriteImportLongSide = 1024;
+    // Zusatz im Dateinamen erkennen und auslesen (vier oder sechs Parameter)
+    static bool  parseSpriteFileName(const QString &path, SpriteInfo &info);
+    // Lage der Zelle mit dem angegebenen Index im Sheet
+    static QRect spriteCellRect(const QPixmap &sheet, const SpriteInfo &info, int index);
+    // Startwert des Nachfrage-Dialogs aus dem Seitenverhaeltnis der Zelle
+    static QSize spriteCellSuggestion(const QSize &cell);
+    // Sheet anhand der SpriteInfo wieder in Einzelframes zerlegen
+    static QVector<QPixmap> sliceSpriteSheet(const QPixmap &sheet, const SpriteInfo &info,
+                                             const QSize &frameSize);
+    // Originalgroesse aus dem Dateinamen lesen oder erfragen (leer = abgebrochen)
+    QSize resolveSpriteFrameSize(const QPixmap &sheet, const SpriteInfo &info);
+
     // Grid helpers
     struct GridDims { int cols, rows; };
     GridDims findOptimalGrid(int N) const;
@@ -145,9 +171,13 @@ private:
     int exportFrameCount() const;
     // Vorgabename im Subordner-Modus: "video"/"picture" + 8-stelliger Hash
     QString exportDefaultName() const;
-    // Tatsächlicher Sprite-Sheet-Dateiname inkl. (cols_rows_frames_fps)-Zusatz,
-    // beim Einzelbild stattdessen mit _BreitexHoehe der tatsächlichen Ausgabe
+    // Tatsächlicher Sprite-Sheet-Dateiname inkl. Parameterliste
+    // (cols_rows_frames_fps_breite_hoehe), beim Einzelbild stattdessen mit
+    // _BreitexHoehe der tatsächlichen Ausgabe
     QString spriteFileName(const QString &pngPath, Ratio ratio = RatioOriginal) const;
+    // Parameterliste bzw. Größenangabe am Ende eines Namens entfernen, damit ein
+    // erneuter Export die alte Liste ersetzt statt eine zweite anzuhängen
+    static QString stripExportSuffix(const QString &stem);
     // Liste der bereits existierenden Zieldateien der gewählten Formate
     QStringList existingExportTargets(const QString &dir, const QString &base,
                                       bool webm, bool mp4, bool gif, bool png,
@@ -156,8 +186,9 @@ private:
     QSize ratioTargetSize(Ratio ratio) const;
     // Größe des zu exportierenden Einzelbildes (Original = proportional skaliert)
     QSize exportImageSize(Ratio ratio) const;
-    // Maße des exportierten Einzelframes nach Anwendung des Crop-Rechtecks
-    QSize singleFrameSourceSize() const;
+    // Maße eines Quellframes nach Anwendung des Crop-Rechtecks — die Groesse,
+    // die beim Export als Parameter 5 und 6 im Dateinamen landet
+    QSize sourceFrameSize() const;
     // Mindestens 10 Pixel mit Alpha < 32?
     static bool hasTransparency(const QImage &img);
     // Proportional in die Zielbox skalieren und den Rest auffüllen

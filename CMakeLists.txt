@@ -26,6 +26,8 @@ qt_add_executable(${PROJECT_NAME} ${WIN32_FLAG}
     VideoExporter.h
     FrameExtractor.cpp
     FrameExtractor.h
+    SpriteImportDialog.cpp
+    SpriteImportDialog.h
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE

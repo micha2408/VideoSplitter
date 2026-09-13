@@ -1823,7 +1823,14 @@ QPixmap VideoWidget::preparedFrame(int index) const
     {
         px = px.copy(cropRect);
     }
-    return expandToRatio(px, m_label->padRatio(), frameHasTransparency(index));
+    bool transparentFill = false;
+    switch (m_label->padFill())
+    {
+    case Label::PadFill::Auto:        transparentFill = frameHasTransparency(index); break;
+    case Label::PadFill::Extend:      transparentFill = false; break;
+    case Label::PadFill::Transparent: transparentFill = true;  break;
+    }
+    return expandToRatio(px, m_label->padRatio(), transparentFill);
 }
 
 // Gleiche Rechnung wie preparedFrame(), nur auf den Maßen

@@ -4,7 +4,8 @@
 #include <QApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
-#include <QRadioButton>
+#include <QComboBox>
+#include <QFormLayout>
 #include <QVBoxLayout>
 
 void Label::mousePressEvent(QMouseEvent *ev)
@@ -144,20 +145,47 @@ void Label::showRatioDialog(const QPoint &globalPos)
         { "9:16",          QSize(9, 16) },
         { "4:3",           QSize(4, 3)  },
         { "3:4",           QSize(3, 4)  },
+        { "3:2",           QSize(3, 2)  },
+        { "2:3",           QSize(2, 3)  },
         { "1:1",           QSize(1, 1)  },
     };
 
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Seitenverhältnis"));
-    QVBoxLayout *lay = new QVBoxLayout(&dlg);
-    QList<QRadioButton *> buttons;
+    QVBoxLayout *lay  = new QVBoxLayout(&dlg);
+    QFormLayout *form = new QFormLayout;
+    lay->addLayout(form);
+
+    QComboBox *ratioBox = new QComboBox(&dlg);
     for (const Entry &e : entries)
     {
-        QRadioButton *rb = new QRadioButton(tr(e.text), &dlg);
-        rb->setChecked(e.ratio == m_padRatio);
-        buttons << rb;
-        lay->addWidget(rb);
+        ratioBox->addItem(tr(e.text));
+        if (e.ratio == m_padBeforeClick)
+        {
+            ratioBox->setCurrentIndex(ratioBox->count() - 1);
+        }
     }
+    form->addRow(tr("Seitenverhältnis:"), ratioBox);
+
+    // Reihenfolge = Reihenfolge von PadFill
+    QComboBox *fillBox = new QComboBox(&dlg);
+    fillBox->addItem(tr("automatisch"));
+    fillBox->addItem(tr("erweitern"));
+    fillBox->addItem(tr("transparent"));
+    fillBox->setItemData(0, tr("Transparent, wenn das Bild selbst transparente Pixel hat, sonst erweitern"), Qt::ToolTipRole);
+    fillBox->setItemData(1, tr("Die äußerste Zeile bzw. Spalte wird über den Rand gestreckt"), Qt::ToolTipRole);
+    fillBox->setItemData(2, tr("Der Rand bleibt durchsichtig"), Qt::ToolTipRole);
+    fillBox->setCurrentIndex(int(m_padFill));
+    form->addRow(tr("Hinzugefügter Rand:"), fillBox);
+
+    // In der Grundstellung gibt es keinen Rand
+    auto updateFillBox = [&]()
+    {
+        fillBox->setEnabled(!entries[ratioBox->currentIndex()].ratio.isEmpty());
+    };
+    connect(ratioBox, &QComboBox::currentIndexChanged, &dlg, updateFillBox);
+    updateFillBox();
+
     QDialogButtonBox *box = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     lay->addWidget(box);
@@ -172,20 +200,13 @@ void Label::showRatioDialog(const QPoint &globalPos)
     }
 
     m_imageCropRect = m_cropBeforeClick;   // ein vorhandener Zuschnitt bleibt erhalten
-    for (int i = 0; i < buttons.size(); ++i)
+    m_padRatio      = entries[ratioBox->currentIndex()].ratio;
+    m_padFill       = static_cast<PadFill>(fillBox->currentIndex());
+    if (m_padRatio.isEmpty())
     {
-        if (!buttons[i]->isChecked())
-        {
-            continue;
-        }
-        m_padRatio = entries[i].ratio;
-        if (m_padRatio.isEmpty())
-        {
-            // Grundstellung: weder Zuschnitt noch Erweiterung
-            m_imageCropRect = QRect();
-            m_newSel        = QRect();
-        }
-        break;
+        // Grundstellung: weder Zuschnitt noch Erweiterung
+        m_imageCropRect = QRect();
+        m_newSel        = QRect();
     }
     update();
     emit cropChanged();

@@ -26,6 +26,10 @@ public:
     // Seitenverhaeltnis, auf das das Bild erweitert wird (leer = Grundstellung)
     QSize padRatio() const { return m_padRatio; }
 
+    // Fuellung des hinzugefuegten Randes
+    enum class PadFill { Auto, Extend, Transparent };
+    PadFill padFill() const { return m_padFill; }
+
     QRect cropRectInImageCoords() const
     {
         return m_cropState != CropState::None ? QRect() : m_imageCropRect;
@@ -42,6 +46,7 @@ public:
         m_newSel=QRect();
         m_lastPos=QPointF();
         m_padRatio=QSize();
+        m_padFill=PadFill::Auto;
         imagePlus = ImagePlus();
     }
 protected:
@@ -77,6 +82,7 @@ private:
     QRect m_newSel;
     QPointF m_lastPos;
     QSize m_padRatio;
+    PadFill m_padFill = PadFill::Auto;
     bool m_didDrag = false;
 signals:
     void sendPic(Label *l);

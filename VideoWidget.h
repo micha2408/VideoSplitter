@@ -47,6 +47,10 @@ private:
     // All captured frames (contiguous, index 0..size()-1)
     QVector<QPixmap> m_bigMap;
     QVector<QPixmap> m_bigMapBackup;
+    // Auswahl je Frame (Klick aufs Bild im Frame Grabber); abgewählte Frames werden bei
+    // Vorschau, Wiedergabe und Export übersprungen. Gleiche Länge wie m_bigMap.
+    QVector<bool> m_frameEnabled;
+    bool frameEnabled(int index) const;
     // Transparenz-Prüfung je Frame, gemerkt über QPixmap::cacheKey()
     mutable QHash<qint64, bool> m_alphaCache;
     int  m_delay      = 0;
@@ -165,11 +169,30 @@ private:
     // Grid helpers
     struct GridDims { int cols, rows; };
     GridDims findOptimalGrid(int N) const;
-    GridDims m_grid = {1,1};
-    QSize    m_cellSize;   // Zellgröße des zuletzt gebauten Grids (Einzelbild: proportional)
+    GridDims m_grid = {1,1};   // Raster des Export-Sheets (nur ausgewählte Frames)
+    QSize    m_cellSize;       // Zellgröße des Export-Sheets (Einzelbild: proportional)
     struct Sliders { int first, last, step; };
     const Sliders getSliderValues() const;
-    QPixmap composeGrid(int first, int count, int step);
+    // Alle Frames im Sliderbereich mit Schrittweite – unabhängig von der Auswahl
+    QList<int> rangeKeys() const;
+    // Davon nur die ausgewählten Frames – genau diese werden exportiert
+    QList<int> selectedKeys() const;
+    // Zellgröße eines Sheets mit diesen Frames im Raster g
+    QSize gridCellSize(const QList<int> &keys, const GridDims &g) const;
+    // Sheet aus den angegebenen Frames; dimDisabled graut abgewählte Frames aus.
+    // prepared erhält auf Wunsch die aufbereiteten Frames in derselben Reihenfolge.
+    QPixmap composeGrid(const QList<int> &keys, const GridDims &g, bool dimDisabled,
+                        QList<QPixmap> *prepared = nullptr) const;
+    // Angezeigtes Grid im Frame Grabber: alle Frames des Bereichs, ein Klick auf
+    // ein Einzelbild schaltet es an bzw. ab
+    QPixmap          m_gridPixmap;
+    GridDims         m_displayGrid = {1,1};
+    QList<int>       m_displayKeys;
+    QRect            m_gridDrawRect;   // Lage des skalierten Grids im Label
+    void fitGridPixmap();
+    // Frame unter der Mausposition im Grid-Label, -1 = keiner
+    int  gridKeyAt(const QPoint &pos) const;
+    void setFrameEnabled(int index, bool on);
     // Anzahl der Frames, die der aktuelle Bereich exportiert (1 = Einzelbild)
     int exportFrameCount() const;
     // Vorgabename im Subordner-Modus: "video"/"picture" + 8-stelliger Hash

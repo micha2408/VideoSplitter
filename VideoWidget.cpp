@@ -373,11 +373,26 @@ bool VideoWidget::eventFilter(QObject *obj, QEvent *event)
     if ((obj == m_gridLabel || obj == m_previewLabel)
         && event->type() == QEvent::MouseButtonRelease)
     {
-        if (static_cast<QMouseEvent*>(event)->button() == Qt::RightButton)
+        const QMouseEvent *me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::RightButton)
         {
             toggleView();
             return true;
         }
+        if (obj == m_gridLabel && me->button() == Qt::LeftButton)
+        {
+            // Klick auf ein Einzelbild schaltet es für die Generierung an bzw. ab
+            const int key = gridKeyAt(me->position().toPoint());
+            if (key >= 0)
+            {
+                setFrameEnabled(key, !frameEnabled(key));
+                return true;
+            }
+        }
+    }
+    if (obj == m_gridLabel && event->type() == QEvent::Resize && m_showingGrid)
+    {
+        fitGridPixmap();
     }
     return QMainWindow::eventFilter(obj, event);
 }
@@ -451,6 +466,7 @@ void VideoWidget::reduceMinMax()
     const int newCount = upper - lower + 1;
     m_bigMap       = m_bigMap.mid(lower, newCount);
     m_bigMapBackup = m_bigMapBackup.mid(lower, newCount); // gelöschte Frames sind unwiederruflich weg
+    m_frameEnabled = m_frameEnabled.mid(lower, newCount);
 
     m_playTimer.stop();
     m_previewTimer.stop();
@@ -510,103 +526,133 @@ void VideoWidget::startPlayback()
 
 void VideoWidget::playTick()
 {
-    auto sliders = getSliderValues();
+    // Nur die ausgewählten Frames abspielen – so wie sie auch exportiert werden
+    const QList<int> keys = selectedKeys();
+    if (keys.isEmpty()) return;
 
-    if (m_playIndex < 0 || m_playIndex >= m_bigMap.size())
+    // Position in der Liste; liegt der Index daneben (Slider bewegt, Frame
+    // abgewählt), mit dem nächsten ausgewählten Frame weitermachen
+    int pos = keys.indexOf(m_playIndex);
+    if (pos < 0)
     {
-        m_playIndex = sliders.first;
+        pos = 0;
+        while (pos < keys.size() && keys[pos] < m_playIndex) ++pos;
+        if (pos >= keys.size()) pos = 0;
     }
+    m_playIndex = keys[pos];
 
     m_label->setImage(preparedFrame(m_playIndex), m_playIndex, m_bigMap.size(), m_delay);
     m_label->update();
 
     m_rangeSlider->setValue(m_playIndex);   // blauen Balken mit Wiedergabe mitlaufen lassen
 
+    const int lastPos = keys.size() - 1;
     if(m_revers->isChecked())
     {
         if(m_isReversed)
         {
-            m_playIndex -= sliders.step;
-            if (m_playIndex < sliders.first)
+            --pos;
+            if (pos < 0)
             {
-                m_playIndex = sliders.first;
+                pos = 0;
                 m_isReversed = false;
             }
         }
         else
         {
-            m_playIndex += sliders.step;
-            if (m_playIndex > sliders.last)
+            ++pos;
+            if (pos > lastPos)
             {
-                m_playIndex = sliders.last;
+                pos = lastPos;
                 m_isReversed = true;
             }
         }
     }
     else
     {
-        m_playIndex += sliders.step;
-        if (m_playIndex > sliders.last)
+        ++pos;
+        if (pos > lastPos)
         {
-            m_playIndex = sliders.first;
+            pos = 0;
         }
     }
+    m_playIndex = keys[pos];
 }
 
 // ─── Grid composing ─────────────────────────────────────────────────────────
 
-QPixmap VideoWidget::composeGrid(int first, int frameCount, int step)
+QList<int> VideoWidget::rangeKeys() const
 {
-    const int N = qMax(1, frameCount / step);
-    m_grid = findOptimalGrid(N);
+    const auto sliders = getSliderValues();
+    const int step = qMax(1, sliders.step);
+    QList<int> keys;
+    for (int i = sliders.first; i <= sliders.last; i += step)
+    {
+        if (i >= 0 && i < m_bigMap.size()) keys << i;
+    }
+    return keys;
+}
 
-    m_previewList.clear();
+QList<int> VideoWidget::selectedKeys() const
+{
+    QList<int> keys = rangeKeys();
+    keys.removeIf([this](int i) { return !frameEnabled(i); });
+    return keys;
+}
 
-    int cellW = m_resolution / m_grid.cols;
-    int cellH = m_resolution / m_grid.rows;
+bool VideoWidget::frameEnabled(int index) const
+{
+    return index < 0 || index >= m_frameEnabled.size() || m_frameEnabled[index];
+}
 
+QSize VideoWidget::gridCellSize(const QList<int> &keys, const GridDims &g) const
+{
     // Einzelbild: kein quadratisches Sheet erzwingen – die längere Seite bekommt
     // die volle Auflösung, die kürzere wird proportional gekürzt.
-    if (N == 1 && first >= 0 && first < m_bigMap.size())
+    if (keys.size() == 1)
     {
-        const QSize src = preparedFrameSize(first);
+        const QSize src = preparedFrameSize(keys.first());
         if (!src.isEmpty())
         {
             const QSize fit = src.scaled(m_resolution, m_resolution, Qt::KeepAspectRatio);
-            cellW = qMax(1, fit.width());
-            cellH = qMax(1, fit.height());
+            return QSize(qMax(1, fit.width()), qMax(1, fit.height()));
         }
     }
-    m_cellSize = QSize(cellW, cellH);
+    return QSize(m_resolution / g.cols, m_resolution / g.rows);
+}
 
-    QPixmap result(m_grid.cols*cellW, m_grid.rows*cellH); // so groß wie nötig, damit alle Frames reinpassen
+QPixmap VideoWidget::composeGrid(const QList<int> &keys, const GridDims &g, bool dimDisabled,
+                                 QList<QPixmap> *prepared) const
+{
+    const QSize cellSize = gridCellSize(keys, g);
+    const int cellW = cellSize.width();
+    const int cellH = cellSize.height();
+
+    QPixmap result(g.cols*cellW, g.rows*cellH); // so groß wie nötig, damit alle Frames reinpassen
     result.fill(Qt::transparent);
     QPainter p(&result);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
-    for (int i = 0; i < N; ++i)
+    for (int i = 0; i < keys.size(); ++i)
     {
-        const int key = first + i * step;
-        if (key < 0 || key >= m_bigMap.size()) continue;
+        const int key = keys[i];
 
         // Zuschnitt und Seitenverhältnis anwenden
         const QPixmap src = preparedFrame(key);
-        m_previewList << src;
+        if (prepared) *prepared << src;
 
-        const int row = i / m_grid.cols;
-        const int col = i % m_grid.cols;
-        // const QRect cell(round(col * cellW), round(row * cellH), round(cellW), round(cellH));
+        const int row = i / g.cols;
+        const int col = i % g.cols;
         const QRect cell(col * cellW, row * cellH, cellW, cellH);
         p.drawPixmap(cell, src.scaled(cell.size(),
                                       Qt::IgnoreAspectRatio,
                                       Qt::SmoothTransformation));
+        if (dimDisabled && !frameEnabled(key))
+        {
+            // Abgewählter Frame: deutlich abgedunkelt, bleibt aber erkennbar
+            p.fillRect(cell, QColor(0, 0, 0, 180));
+        }
     }
-    const double cellAspect = static_cast<double>(m_grid.rows) / m_grid.cols;
-    setWindowTitle(
-        QString("Frame Grabber  —  %1×%2  |  %3 frames  |  Stretch %4×  |  Verschnitt %5")
-            .arg(m_grid.cols).arg(m_grid.rows).arg(N)
-            .arg(QString::number(cellAspect, 'f', 2)));
-
     return result;
 }
 
@@ -615,9 +661,30 @@ void VideoWidget::paintGrid()
     if (m_bigMap.isEmpty()) return;
     auto sliders = getSliderValues();
 
-    const QPixmap grid = composeGrid(sliders.first, sliders.last - sliders.first + 1, sliders.step);
-    m_gridLabel->setPixmap(grid.scaled(
-        m_gridLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    // Angezeigt werden alle Frames des Bereichs, damit sich abgewählte Frames
+    // per Klick wieder aufnehmen lassen
+    m_displayKeys = rangeKeys();
+    m_displayGrid = findOptimalGrid(m_displayKeys.size());
+    QList<QPixmap> prepared;
+    m_gridPixmap = composeGrid(m_displayKeys, m_displayGrid, true, &prepared);
+    fitGridPixmap();
+
+    // Vorschau zeigt nur die ausgewählten Frames, in der Zellgröße des Export-Sheets
+    m_previewList.clear();
+    for (int i = 0; i < m_displayKeys.size(); ++i)
+    {
+        if (frameEnabled(m_displayKeys[i])) m_previewList << prepared[i];
+    }
+    const QList<int> sel = selectedKeys();
+    m_grid     = findOptimalGrid(sel.size());
+    m_cellSize = gridCellSize(sel, m_grid);
+
+    const double cellAspect = static_cast<double>(m_grid.rows) / m_grid.cols;
+    setWindowTitle(
+        QString("Frame Grabber  —  %1×%2  |  %3 von %4 frames  |  Stretch %5×  |  Verschnitt %6")
+            .arg(m_grid.cols).arg(m_grid.rows).arg(sel.size()).arg(m_displayKeys.size())
+            .arg(QString::number(cellAspect, 'f', 2))
+            .arg(m_grid.cols * m_grid.rows - sel.size()));
 
     // Start preview animation
     m_previewIndex = 0;
@@ -628,6 +695,50 @@ void VideoWidget::paintGrid()
         const int interval = qMax(1, m_delay * sliders.step);
         m_previewTimer.start(interval);
     }
+    else
+    {
+        m_previewTimer.stop();
+        m_previewLabel->clear();
+    }
+}
+
+// Grid in das Label einpassen und seine Lage für die Klick-Auswertung merken
+void VideoWidget::fitGridPixmap()
+{
+    if (m_gridPixmap.isNull())
+    {
+        m_gridDrawRect = QRect();
+        return;
+    }
+
+    const QPixmap scaled = m_gridPixmap.scaled(
+        m_gridLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    m_gridLabel->setPixmap(scaled);
+
+    // QLabel zentriert die Pixmap (AlignCenter)
+    const int x0 = (m_gridLabel->width()  - scaled.width())  / 2;
+    const int y0 = (m_gridLabel->height() - scaled.height()) / 2;
+    m_gridDrawRect = QRect(QPoint(x0, y0), scaled.size());
+}
+
+int VideoWidget::gridKeyAt(const QPoint &pos) const
+{
+    if (!m_gridDrawRect.contains(pos) || m_displayKeys.isEmpty()) return -1;
+
+    const QPoint rel = pos - m_gridDrawRect.topLeft();
+    const int col = rel.x() * m_displayGrid.cols / m_gridDrawRect.width();
+    const int row = rel.y() * m_displayGrid.rows / m_gridDrawRect.height();
+    const int i   = row * m_displayGrid.cols + col;
+    return (i >= 0 && i < m_displayKeys.size()) ? m_displayKeys[i] : -1;   // leere Zellen am Ende
+}
+
+void VideoWidget::setFrameEnabled(int index, bool on)
+{
+    if (index < 0 || index >= m_frameEnabled.size() || m_frameEnabled[index] == on) return;
+    m_frameEnabled[index] = on;
+    // Grid, Vorschau und Wiedergabe greifen sofort auf die neue Auswahl zu
+    if (m_showingGrid) paintGrid();
+    else               updateTitle();
 }
 
 // ─── Slider slots ───────────────────────────────────────────────────────────
@@ -843,6 +954,7 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
     m_actBgRemove->setEnabled(false);
 
     m_bigMap.clear();
+    m_frameEnabled.clear();
     m_previewList.clear();
     m_delay       = 0;
     m_fillingMap  = true;
@@ -959,6 +1071,7 @@ void VideoWidget::onFramesExtracted(QVector<QPixmap> frames, int delayMs)
     setLoadingFile("");
     m_bigMap  = frames;
     m_bigMapBackup = frames;
+    m_frameEnabled.fill(true, frames.size());   // anfangs sind alle Frames ausgewählt
     m_delay   = delayMs;
     const int count = m_bigMap.size();
 
@@ -997,10 +1110,11 @@ void VideoWidget::updateTitle()
     auto sliders = getSliderValues();
     const double fps = sliders.step > 0 && m_delay > 0 ? 1000.0 / (m_delay * sliders.step) : 0.0;
     const QString status = m_paused ? "  ⏸ PAUSE" : "";
-    setWindowTitle(QString("VideoConverter  —  [%1 … %2]  step %3  |  %6*%7  |  %4 fps%5")
+    setWindowTitle(QString("VideoConverter  —  [%1 … %2]  step %3  |  %6*%7  |  %8/%9 Frames  |  %4 fps%5")
                        .arg(sliders.first).arg(sliders.last).arg(sliders.step)
                        .arg(fps, 0, 'f', 1).arg(status)
-                       .arg(m_bigMap[0].width()).arg(m_bigMap[0].height()));
+                       .arg(m_bigMap[0].width()).arg(m_bigMap[0].height())
+                       .arg(selectedKeys().size()).arg(rangeKeys().size()));
 }
 
 // ─── Protokoll ───────────────────────────────────────────────────────────────
@@ -1197,6 +1311,11 @@ void VideoWidget::exportDialog()
     // Einzelbild? Dann nur PNG, und der Vorgabename lautet "picture…"
     const int  frameCount = exportFrameCount();
     const bool single     = frameCount <= 1;
+    if (frameCount == 0)
+    {
+        QMessageBox::information(this, "Export", "Im gewählten Bereich ist kein Frame ausgewählt.");
+        return;
+    }
 
     QDialog dlg(this);
     dlg.setWindowTitle(QString("Exportieren von %1 %2")
@@ -1447,14 +1566,7 @@ void VideoWidget::runExport(const QString &dir, const QString &baseName,
 // 1 bedeutet Einzelbild – dann gibt es weder Video-Formate noch Grid-Zusatz.
 int VideoWidget::exportFrameCount() const
 {
-    const auto sliders = getSliderValues();
-    const int step = qMax(1, sliders.step);
-    int n = 0;
-    for (int i = sliders.first; i <= sliders.last; i += step)
-    {
-        if (i >= 0 && i < m_bigMap.size()) ++n;
-    }
-    return n;
+    return selectedKeys().size();
 }
 
 // Vorgabename im Subordner-Modus: "video"/"picture" plus 8-stelligem Hash der
@@ -1511,15 +1623,8 @@ QString VideoWidget::spriteFileName(const QString &pngPath, Ratio ratio) const
     }
 
     auto sliders = getSliderValues();
-    const int frameCount = sliders.last - sliders.first + 1;
-    const int N = qMax(1, frameCount / sliders.step);
-    const GridDims g = findOptimalGrid(N);
-    int frames = 0;
-    for (int i = 0; i < N; ++i)
-    {
-        const int key = sliders.first + i * sliders.step;
-        if (key >= 0 && key < m_bigMap.size()) ++frames;
-    }
+    const int frames = exportFrameCount();
+    const GridDims g = findOptimalGrid(frames);
     const double fps = m_delay > 0 ? 1000.0 / (m_delay * sliders.step) : 25.0;
     const QSize  src = sourceFrameSize();
     return stem + QString("(%1_%2_%3_%4_%5_%6).png")
@@ -1677,8 +1782,9 @@ QSize VideoWidget::ratioTargetSize(Ratio ratio) const
 // 5 und 6 im Dateinamen.
 QSize VideoWidget::sourceFrameSize() const
 {
-    const auto sliders = getSliderValues();
-    return preparedFrameSize(sliders.first);
+    // erster ausgewählter Frame, sonst Anfang des Bereichs
+    const QList<int> keys = selectedKeys();
+    return preparedFrameSize(keys.isEmpty() ? getSliderValues().first : keys.first());
 }
 
 // Größe der Einzelbild-Ausgabe. Bei "Original" wird nur proportional skaliert,
@@ -1888,13 +1994,12 @@ void VideoWidget::saveVideo(const QString &path)
     }
 
     // Frames im Sliderbereich einsammeln, mit Schrittweite, Zuschnitt und
-    // Seitenverhältnis-Erweiterung
 
+    // Seitenverhältnis-Erweiterung, abgewählte Frames fallen weg
     QMap<int, QPixmap> toExport;
     int idx = 0;
-    for (int i = sliders.first; i <= sliders.last; i += sliders.step)
+    for (int i : selectedKeys())
     {
-        if (i < 0 || i >= m_bigMap.size()) continue;
         toExport[idx++] = preparedFrame(i);
     }
     if (toExport.isEmpty()) return;
@@ -1924,18 +2029,19 @@ void VideoWidget::saveVideo(const QString &path)
 
 void VideoWidget::saveSpriteSheet(const QString &path, Ratio ratio)
 {
-    auto sliders = getSliderValues();
+    // Nur die ausgewählten Frames kommen ins Sheet
+    const QList<int> keys = selectedKeys();
+    if (keys.isEmpty()) return;
 
     QPixmap grid;
-    if (ratio != RatioOriginal && exportFrameCount() <= 1
-        && sliders.first >= 0 && sliders.first < m_bigMap.size())
+    if (ratio != RatioOriginal && keys.size() == 1)
     {
         // Einzelbild auf ein festes Seitenverhältnis erweitern
-        grid = padToRatio(preparedFrame(sliders.first), ratio);
+        grid = padToRatio(preparedFrame(keys.first()), ratio);
     }
     else
     {
-        grid = composeGrid(sliders.first, sliders.last - sliders.first + 1, sliders.step);
+        grid = composeGrid(keys, findOptimalGrid(keys.size()), false);
     }
 
     const QString pathExt = spriteFileName(path, ratio);

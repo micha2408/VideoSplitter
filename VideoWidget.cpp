@@ -132,6 +132,9 @@ VideoWidget::VideoWidget(QWidget *parent)
     bar->addMenu(menuEdit);
     menuEdit->addAction("Pause / Weiter  [Space]", this, &VideoWidget::togglePause);
     menuEdit->addAction("min/max reduzieren", this, &VideoWidget::reduceMinMax);
+    QAction *actPingPong = menuEdit->addAction("PingPong (rückwärts anhängen)");
+    actPingPong->setCheckable(true);
+    connect(actPingPong, &QAction::toggled, this, &VideoWidget::setPingPong);
 
     QMenu *menuFx = new QMenu("Effekte", bar);
     bar->addMenu(menuFx);
@@ -448,7 +451,8 @@ void VideoWidget::togglePause()
     else
     {
         // Fortsetzung an aktueller Position; nur außerhalb des Bereichs vom unteren Griff
-        if (m_playIndex < m_rangeSlider->lowerValue() || m_playIndex >= m_rangeSlider->upperValue())
+        const int src = sourceIndex(m_playIndex);
+        if (src < m_rangeSlider->lowerValue() || src >= m_rangeSlider->upperValue())
             m_playIndex = m_rangeSlider->lowerValue();
         m_playTimer.start(qMax(1, m_delay * m_sortSlider->value()));
     }
@@ -467,12 +471,14 @@ void VideoWidget::reduceMinMax()
     m_bigMap       = m_bigMap.mid(lower, newCount);
     m_bigMapBackup = m_bigMapBackup.mid(lower, newCount); // gelöschte Frames sind unwiederruflich weg
     m_frameEnabled = m_frameEnabled.mid(lower, newCount);
+    if (!m_pingEnabled.isEmpty())
+        m_pingEnabled = m_pingEnabled.mid(lower, newCount);
 
     m_playTimer.stop();
     m_previewTimer.stop();
 
     // Aktuelle Position relativ zum neuen Bereich erhalten
-    m_playIndex = qBound(0, m_playIndex - lower, newCount - 1);
+    m_playIndex = qBound(0, sourceIndex(m_playIndex) - lower, newCount - 1);
 
     m_rangeSlider->blockSignals(true);
     m_sortSlider->blockSignals(true);
@@ -541,10 +547,12 @@ void VideoWidget::playTick()
     }
     m_playIndex = keys[pos];
 
-    m_label->setImage(preparedFrame(m_playIndex), m_playIndex, m_bigMap.size(), m_delay);
+    // Label und Slider kennen nur die Quellframes (PingPong-Kopien → Original)
+    const int src = sourceIndex(m_playIndex);
+    m_label->setImage(preparedFrame(m_playIndex), src, m_bigMap.size(), m_delay);
     m_label->update();
 
-    m_rangeSlider->setValue(m_playIndex);   // blauen Balken mit Wiedergabe mitlaufen lassen
+    m_rangeSlider->setValue(src);   // blauen Balken mit Wiedergabe mitlaufen lassen
 
     const int lastPos = keys.size() - 1;
     if(m_revers->isChecked())
@@ -590,6 +598,15 @@ QList<int> VideoWidget::rangeKeys() const
     {
         if (i >= 0 && i < m_bigMap.size()) keys << i;
     }
+    if (m_pingPong)
+    {
+        // Gleiche Auswahl und Schrittweite, rückwärts als PingPong-Kopien
+        const int n = m_bigMap.size();
+        for (qsizetype k = keys.size() - 1; k >= 0; --k)
+        {
+            keys << keys[k] + n;
+        }
+    }
     return keys;
 }
 
@@ -602,7 +619,32 @@ QList<int> VideoWidget::selectedKeys() const
 
 bool VideoWidget::frameEnabled(int index) const
 {
+    const int n = m_bigMap.size();
+    if (index >= n)
+    {
+        const int src = index - n;
+        return src >= m_pingEnabled.size() || m_pingEnabled[src];
+    }
     return index < 0 || index >= m_frameEnabled.size() || m_frameEnabled[index];
+}
+
+int VideoWidget::sourceIndex(int key) const
+{
+    const int n = m_bigMap.size();
+    return key >= n ? key - n : key;
+}
+
+void VideoWidget::setPingPong(bool on)
+{
+    m_pingPong = on;
+    // Erstmalige Aktivierung für dieses Video: alle Kopien ausgewählt,
+    // unabhängig vom Zustand der Originale. Später bleibt die Auswahl erhalten.
+    if (on && m_pingEnabled.size() != m_bigMap.size())
+        m_pingEnabled.fill(true, m_bigMap.size());
+    logMessage(on ? "PingPong-Modus an" : "PingPong-Modus aus");
+    if (m_bigMap.isEmpty()) return;
+    if (m_showingGrid) paintGrid();
+    else               updateTitle();
 }
 
 QSize VideoWidget::gridCellSize(const QList<int> &keys, const GridDims &g) const
@@ -734,8 +776,11 @@ int VideoWidget::gridKeyAt(const QPoint &pos) const
 
 void VideoWidget::setFrameEnabled(int index, bool on)
 {
-    if (index < 0 || index >= m_frameEnabled.size() || m_frameEnabled[index] == on) return;
-    m_frameEnabled[index] = on;
+    const int n = m_bigMap.size();
+    QVector<bool> &flags = index >= n ? m_pingEnabled : m_frameEnabled;
+    const int i = index >= n ? index - n : index;
+    if (i < 0 || i >= flags.size() || flags[i] == on) return;
+    flags[i] = on;
     // Grid, Vorschau und Wiedergabe greifen sofort auf die neue Auswahl zu
     if (m_showingGrid) paintGrid();
     else               updateTitle();
@@ -955,6 +1000,7 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
 
     m_bigMap.clear();
     m_frameEnabled.clear();
+    m_pingEnabled.clear();
     m_previewList.clear();
     m_delay       = 0;
     m_fillingMap  = true;
@@ -1072,6 +1118,9 @@ void VideoWidget::onFramesExtracted(QVector<QPixmap> frames, int delayMs)
     m_bigMap  = frames;
     m_bigMapBackup = frames;
     m_frameEnabled.fill(true, frames.size());   // anfangs sind alle Frames ausgewählt
+    m_pingEnabled.clear();
+    if (m_pingPong)
+        m_pingEnabled.fill(true, frames.size());  // PingPong bleibt an → Kopien ebenfalls ausgewählt
     m_delay   = delayMs;
     const int count = m_bigMap.size();
 
@@ -1919,8 +1968,10 @@ bool VideoWidget::frameHasTransparency(int index) const
 
 // Ein Quellframe so, wie er angezeigt und exportiert wird: erst der Zuschnitt
 // aus dem rubberBand, dann die Erweiterung auf das gewählte Seitenverhältnis.
+// PingPong-Kopien liefern das Bild ihres Originals.
 QPixmap VideoWidget::preparedFrame(int index) const
 {
+    index = sourceIndex(index);
     if (index < 0 || index >= m_bigMap.size()) return QPixmap();
 
     QPixmap px = m_bigMap[index];
@@ -1942,6 +1993,7 @@ QPixmap VideoWidget::preparedFrame(int index) const
 // Gleiche Rechnung wie preparedFrame(), nur auf den Maßen
 QSize VideoWidget::preparedFrameSize(int index) const
 {
+    index = sourceIndex(index);
     if (index < 0 || index >= m_bigMap.size()) return QSize();
 
     QSize sz = m_bigMap[index].size();

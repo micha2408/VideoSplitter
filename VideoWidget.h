@@ -51,6 +51,15 @@ private:
     // Vorschau, Wiedergabe und Export übersprungen. Gleiche Länge wie m_bigMap.
     QVector<bool> m_frameEnabled;
     bool frameEnabled(int index) const;
+    // PingPong-Modus: hinter die Vorwärts-Frames werden dieselben Frames in
+    // umgekehrter Reihenfolge gehängt. Diese Kopien tragen die Schlüssel
+    // m_bigMap.size() + Quellindex und haben eine eigene Auswahl, die beim
+    // Ausschalten erhalten bleibt (leer = für dieses Video noch nie aktiviert).
+    bool          m_pingPong = false;
+    QVector<bool> m_pingEnabled;
+    // Schlüssel (Original oder PingPong-Kopie) → Index in m_bigMap
+    int  sourceIndex(int key) const;
+    void setPingPong(bool on);
     // Transparenz-Prüfung je Frame, gemerkt über QPixmap::cacheKey()
     mutable QHash<qint64, bool> m_alphaCache;
     int  m_delay      = 0;

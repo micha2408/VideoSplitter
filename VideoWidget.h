@@ -146,9 +146,6 @@ private:
     {
         QSettings().setValue("loadingFile", path);
     }
-    // Seitenverhaeltnis des Einzelbild-Exports (Reihenfolge = Reihenfolge im Dialog)
-    enum Ratio { RatioOriginal = 0, Ratio4_3, Ratio3_4, Ratio1_1 };
-
     // ─── Sprite-Sheet-Import ────────────────────────────────────────────────
     // Beim Export bekommt ein Sprite-Sheet den Zusatz
     // "(cols_rows_frames_fps_breite_hoehe)"; Breite und Hoehe sind die Masse des
@@ -209,30 +206,26 @@ private:
     // Tatsächlicher Sprite-Sheet-Dateiname inkl. Parameterliste
     // (cols_rows_frames_fps_breite_hoehe), beim Einzelbild stattdessen mit
     // _BreitexHoehe der tatsächlichen Ausgabe
-    QString spriteFileName(const QString &pngPath, Ratio ratio = RatioOriginal) const;
+    QString spriteFileName(const QString &pngPath) const;
     // Parameterliste bzw. Größenangabe am Ende eines Namens entfernen, damit ein
     // erneuter Export die alte Liste ersetzt statt eine zweite anzuhängen
     static QString stripExportSuffix(const QString &stem);
     // Liste der bereits existierenden Zieldateien der gewählten Formate
     QStringList existingExportTargets(const QString &dir, const QString &base,
-                                      bool webm, bool mp4, bool gif, bool png,
-                                      Ratio ratio = RatioOriginal) const;
-    // Sollgröße eines Seitenverhältnisses bei der aktuellen Auflösung
-    QSize ratioTargetSize(Ratio ratio) const;
-    // Größe des zu exportierenden Einzelbildes (Original = proportional skaliert)
-    QSize exportImageSize(Ratio ratio) const;
+                                      bool webm, bool mp4, bool gif, bool png) const;
+    // Größe des zu exportierenden Einzelbildes (proportional skaliert)
+    QSize exportImageSize() const;
     // Maße eines Quellframes nach Anwendung des Crop-Rechtecks — die Groesse,
     // die beim Export als Parameter 5 und 6 im Dateinamen landet
     QSize sourceFrameSize() const;
     // Mindestens 10 Pixel mit Alpha < 32?
     static bool hasTransparency(const QImage &img);
-    // Proportional in die Zielbox skalieren und den Rest auffüllen
-    QPixmap padToRatio(const QPixmap &src, Ratio ratio) const;
     // Bild zentriert in eine Box legen und den Rand auffüllen
     static QImage padCentered(const QImage &fitted, const QSize &target,
                               bool transparentFill);
-    // Ohne zu skalieren auf ein Seitenverhältnis erweitern (Label-Auswahl)
-    QPixmap expandToRatio(const QPixmap &src, const QSize &ratio,
+    // Ausschnitt ohne zu skalieren auf ein Seitenverhältnis erweitern (Label-
+    // Auswahl); Pixel des Originalbildes außerhalb des Ausschnitts gehen vor Rand
+    QPixmap expandToRatio(const QPixmap &src, const QRect &crop, const QSize &ratio,
                           bool transparentFill) const;
     // Enthält der Quellframe transparente Pixel? (Ergebnis wird gemerkt)
     bool frameHasTransparency(int index) const;
@@ -260,12 +253,11 @@ private slots:
     void onBgProgress(int done, int total);
     void onBgFinished();
     void openFile();
-    void saveSpriteSheet(const QString &path, Ratio ratio = RatioOriginal);
+    void saveSpriteSheet(const QString &path);
     void saveVideo(const QString &path);
     void exportDialog();
     void runExport(const QString &dir, const QString &baseName,
-                   bool webm, bool mp4, bool gif, bool png,
-                   Ratio ratio = RatioOriginal);
+                   bool webm, bool mp4, bool gif, bool png);
     void openWithExplorer();
     void openWithUrl();
     void openWithXnView();

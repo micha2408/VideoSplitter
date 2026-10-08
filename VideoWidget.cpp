@@ -39,7 +39,6 @@
 #include <QFormLayout>
 #include <QLineEdit>
 #include <QPushButton>
-#include <QRadioButton>
 #include <QCryptographicHash>
 #include <QPlainTextEdit>
 #include <QSplitter>
@@ -1426,42 +1425,14 @@ void VideoWidget::exportDialog()
     dirRow->addWidget(dirEdit);
     dirRow->addWidget(browseBtn);
 
-    // 3. Mehrere Frames: Mehrfachauswahl der Formate.
-    //    Einzelbild: statt der Video-Formate das Seitenverhältnis der PNG-Ausgabe.
+    // 3. Mehrere Frames: Mehrfachauswahl der Formate (Einzelbild: immer PNG)
     QCheckBox *cbWebm = nullptr;
     QCheckBox *cbMp4  = nullptr;
     QCheckBox *cbGif  = nullptr;
     QCheckBox *cbPng  = nullptr;
-    QList<QRadioButton *> ratioButtons;   // Index = Ratio-Wert
     QHBoxLayout *fmtRow = new QHBoxLayout;
 
-    if (single)
-    {
-        struct RatioEntry { Ratio ratio; const char *label; const char *hint; };
-        const RatioEntry entries[] = {
-            { RatioOriginal, "Original", "Nur proportional skaliert, es werden keine Pixel ergänzt" },
-            { Ratio4_3,      "4:3",      "Oben und unten wird aufgefüllt, bis 4:3 erreicht ist" },
-            { Ratio3_4,      "3:4",      "Links und rechts wird aufgefüllt, bis 3:4 erreicht ist" },
-            { Ratio1_1,      "1:1",      "Die kürzere Seite wird aufgefüllt, bis das Bild quadratisch ist" },
-        };
-        const int saved = s.value("export/ratio", int(RatioOriginal)).toInt();
-        for (const RatioEntry &e : entries)
-        {
-            const QSize sz = exportImageSize(e.ratio);
-            QRadioButton *rb = new QRadioButton(
-                QString("%1 (%2×%3)").arg(e.label).arg(sz.width()).arg(sz.height()), &dlg);
-            rb->setToolTip(e.hint);
-            rb->setChecked(int(e.ratio) == saved);
-            ratioButtons << rb;
-            fmtRow->addWidget(rb);
-        }
-        // Unbrauchbarer gemerkter Wert → auf "Original" zurückfallen
-        if (saved < 0 || saved >= ratioButtons.size())
-        {
-            ratioButtons.first()->setChecked(true);
-        }
-    }
-    else
+    if (!single)
     {
         cbWebm = new QCheckBox("WEBM", &dlg);
         cbMp4  = new QCheckBox("MP4",  &dlg);
@@ -1479,21 +1450,18 @@ void VideoWidget::exportDialog()
     }
     fmtRow->addStretch();
 
-    // Aktuell gewähltes Seitenverhältnis (bei mehreren Frames immer Original)
-    auto chosenRatio = [&ratioButtons]() -> Ratio
-    {
-        for (int i = 0; i < ratioButtons.size(); ++i)
-        {
-            if (ratioButtons[i]->isChecked()) return static_cast<Ratio>(i);
-        }
-        return RatioOriginal;
-    };
-
     QFormLayout *form = new QFormLayout;
     form->addRow("Dateiname:", nameEdit);
     form->addRow(cbSub,        subEdit);
     form->addRow("Ordner:",    dirRow);
-    form->addRow(single ? "Seitenverhältnis:" : "Formate:", fmtRow);
+    if (single)
+    {
+        delete fmtRow;
+    }
+    else
+    {
+        form->addRow("Formate:", fmtRow);
+    }
 
     // 4. Export starten oder abbrechen
     QDialogButtonBox *bb = new QDialogButtonBox(&dlg);
@@ -1508,7 +1476,7 @@ void VideoWidget::exportDialog()
 
     // Bei jeder Änderung prüfen, ob eine der Zieldateien schon existiert.
     // Dateiname-Feld wird dann rot, Tooltip nennt die betroffenen Dateien.
-    auto validate = [this, single, nameEdit, subEdit, cbSub, dirEdit, &chosenRatio]()
+    auto validate = [this, single, nameEdit, subEdit, cbSub, dirEdit]()
     {
         QString dir = dirEdit->text().trimmed();
         const QString sub = subEdit->text().trimmed();
@@ -1518,8 +1486,7 @@ void VideoWidget::exportDialog()
         const QString base = nameEdit->text().trimmed();
         // immer alle möglichen Formate prüfen (beim Einzelbild nur PNG)
         const QStringList existing = base.isEmpty() ? QStringList()
-            : existingExportTargets(dir, base, !single, !single, !single, true,
-                                    chosenRatio());
+            : existingExportTargets(dir, base, !single, !single, !single, true);
         if (existing.isEmpty())
         {
             nameEdit->setStyleSheet(QString());
@@ -1536,14 +1503,7 @@ void VideoWidget::exportDialog()
     connect(subEdit,  &QLineEdit::textChanged, &dlg, validate);
     connect(dirEdit,  &QLineEdit::textChanged, &dlg, validate);
     connect(cbSub,  &QCheckBox::toggled, &dlg, validate);
-    if (single)
-    {
-        for (QRadioButton *rb : std::as_const(ratioButtons))
-        {
-            connect(rb, &QRadioButton::toggled, &dlg, validate);
-        }
-    }
-    else
+    if (!single)
     {
         connect(cbWebm, &QCheckBox::toggled, &dlg, validate);
         connect(cbMp4,  &QCheckBox::toggled, &dlg, validate);
@@ -1559,11 +1519,7 @@ void VideoWidget::exportDialog()
     s.setValue("export/subOn", cbSub->isChecked());
     s.setValue("export/sub",   subEdit->text());
     s.setValue("export/dir",   dirEdit->text());
-    if (single)
-    {
-        s.setValue("export/ratio", int(chosenRatio()));
-    }
-    else
+    if (!single)
     {
         s.setValue("export/webm", cbWebm->isChecked());
         s.setValue("export/mp4",  cbMp4->isChecked());
@@ -1582,7 +1538,7 @@ void VideoWidget::exportDialog()
     if (single)
     {
         // Einzelbild: es entsteht immer genau eine PNG-Datei
-        runExport(dir, base, false, false, false, true, chosenRatio());
+        runExport(dir, base, false, false, false, true);
         return;
     }
 
@@ -1599,7 +1555,7 @@ void VideoWidget::exportDialog()
 }
 
 void VideoWidget::runExport(const QString &dir, const QString &baseName,
-                            bool webm, bool mp4, bool gif, bool png, Ratio ratio)
+                            bool webm, bool mp4, bool gif, bool png)
 {
     QDir().mkpath(dir);
     // Eine aus einem importierten Sheet stammende Parameterliste faellt weg;
@@ -1608,7 +1564,7 @@ void VideoWidget::runExport(const QString &dir, const QString &baseName,
     if (webm) saveVideo(stem + ".webm");
     if (mp4)  saveVideo(stem + ".mp4");
     if (gif)  saveVideo(stem + ".gif");
-    if (png)  saveSpriteSheet(stem + ".png", ratio);
+    if (png)  saveSpriteSheet(stem + ".png");
 }
 
 // Anzahl der Frames, die der aktuelle Bereich (mit step) tatsächlich exportiert.
@@ -1654,7 +1610,7 @@ QString VideoWidget::stripExportSuffix(const QString &stem)
     }
 }
 
-QString VideoWidget::spriteFileName(const QString &pngPath, Ratio ratio) const
+QString VideoWidget::spriteFileName(const QString &pngPath) const
 {
     // Auf dem Namen ohne Endung arbeiten und eine alte Parameterliste verwerfen
     QString stem = pngPath;
@@ -1667,7 +1623,7 @@ QString VideoWidget::spriteFileName(const QString &pngPath, Ratio ratio) const
     if (exportFrameCount() <= 1)
     {
         // Einzelbild → tatsächliche Ausgabegröße an den Namen hängen
-        const QSize sz = exportImageSize(ratio);
+        const QSize sz = exportImageSize();
         return stem + QString("_%1x%2.png").arg(sz.width()).arg(sz.height());
     }
 
@@ -1811,21 +1767,6 @@ QSize VideoWidget::resolveSpriteFrameSize(const QPixmap &sheet, const SpriteInfo
     return dlg.frameSize();
 }
 
-// Sollgröße eines Seitenverhältnisses bei der aktuell gewählten Auflösung:
-// 4:3 → 1024×768 bzw. 2048×1536, 3:4 → 768×1024 bzw. 1536×2048, 1:1 → quadratisch.
-QSize VideoWidget::ratioTargetSize(Ratio ratio) const
-{
-    const int base = m_resolution;
-    switch (ratio)
-    {
-    case Ratio4_3: return QSize(base, base * 3 / 4);
-    case Ratio3_4: return QSize(base * 3 / 4, base);
-    case Ratio1_1: return QSize(base, base);
-    default:       break;
-    }
-    return QSize(base, base);
-}
-
 // Maße eines Quellframes, nachdem das Crop-Rechteck angewandt wurde. Genau
 // diese Groesse wird beim Export in die Zellen gepresst und landet als Parameter
 // 5 und 6 im Dateinamen.
@@ -1836,12 +1777,10 @@ QSize VideoWidget::sourceFrameSize() const
     return preparedFrameSize(keys.isEmpty() ? getSliderValues().first : keys.first());
 }
 
-// Größe der Einzelbild-Ausgabe. Bei "Original" wird nur proportional skaliert,
-// die längere Seite bekommt also die volle Auflösung (wie in composeGrid()).
-QSize VideoWidget::exportImageSize(Ratio ratio) const
+// Größe der Einzelbild-Ausgabe. Es wird nur proportional skaliert, die
+// längere Seite bekommt also die volle Auflösung (wie in composeGrid()).
+QSize VideoWidget::exportImageSize() const
 {
-    if (ratio != RatioOriginal) return ratioTargetSize(ratio);
-
     const QSize src = sourceFrameSize();
     if (src.isEmpty()) return QSize(m_resolution, m_resolution);
 
@@ -1919,35 +1858,34 @@ QImage VideoWidget::padCentered(const QImage &fitted, const QSize &target,
     return out;
 }
 
-// Skaliert die Quelle proportional in die Zielbox und füllt den verbleibenden
-// Rand oben/unten bzw. links/rechts auf. Die Proportionen des Bildes bleiben
-// dabei unverändert.
-QPixmap VideoWidget::padToRatio(const QPixmap &src, Ratio ratio) const
+// Erweitert den Ausschnitt "crop" von "src" auf das gewählte Seitenverhältnis,
+// ohne Pixel zu skalieren. Zuerst werden die Pixel des Originalbildes genommen,
+// die außerhalb des Ausschnitts liegen; erst wenn das Originalbild in einer
+// Richtung nicht reicht, wird außen aufgefüllt.
+QPixmap VideoWidget::expandToRatio(const QPixmap &src, const QRect &crop,
+                                   const QSize &ratio, bool transparentFill) const
 {
-    const QSize target = ratioTargetSize(ratio);
-    if (src.isNull() || target.isEmpty()) return src;
+    if (src.isNull() || crop.isEmpty()) return src;
+    const QPixmap cropped = crop == src.rect() ? src : src.copy(crop);
+    if (ratio.isEmpty()) return cropped;
 
-    const QImage source = src.toImage();
-    const QImage fitted = source.scaled(target, Qt::KeepAspectRatio,
-                                        Qt::SmoothTransformation);
-    if (fitted.isNull()) return src;
+    // Kleinste Box mit dem Zielverhältnis, die den Ausschnitt vollständig enthält
+    const QSize target = ratio.scaled(crop.size(), Qt::KeepAspectRatioByExpanding);
+    if (target.isEmpty() || target == crop.size()) return cropped;
 
-    return QPixmap::fromImage(padCentered(fitted, target, hasTransparency(source)));
-}
+    // Je Achse: Box mittig um den Ausschnitt legen und so verschieben, dass sie
+    // im Originalbild bleibt. Ist das Bild kürzer als die Box, ganz übernehmen.
+    auto span = [](int start, int len, int want, int total) -> QPair<int, int>
+    {
+        if (want >= total) return { 0, total };
+        return { qBound(0, start - (want - len) / 2, total - want), want };
+    };
+    const auto [x, w] = span(crop.x(), crop.width(),  target.width(),  src.width());
+    const auto [y, h] = span(crop.y(), crop.height(), target.height(), src.height());
+    const QPixmap grown = src.copy(x, y, w, h);
+    if (grown.size() == target) return grown;
 
-// Erweitert das Bild auf das gewählte Seitenverhältnis, ohne die vorhandenen
-// Pixel zu skalieren: es wird ausschließlich außen aufgefüllt.
-QPixmap VideoWidget::expandToRatio(const QPixmap &src, const QSize &ratio,
-                                   bool transparentFill) const
-{
-    if (src.isNull() || ratio.isEmpty()) return src;
-
-    // Kleinste Box mit dem Zielverhältnis, die das Bild vollständig enthält
-    const QSize target = ratio.scaled(src.size(), Qt::KeepAspectRatioByExpanding);
-    if (target.isEmpty() || target == src.size()) return src;
-
-    const QImage source = src.toImage();
-    return QPixmap::fromImage(padCentered(source, target, transparentFill));
+    return QPixmap::fromImage(padCentered(grown.toImage(), target, transparentFill));
 }
 
 // Die Transparenz-Prüfung läuft über das ganze Bild, deshalb wird das Ergebnis
@@ -1967,18 +1905,19 @@ bool VideoWidget::frameHasTransparency(int index) const
 }
 
 // Ein Quellframe so, wie er angezeigt und exportiert wird: erst der Zuschnitt
-// aus dem rubberBand, dann die Erweiterung auf das gewählte Seitenverhältnis.
+// aus dem rubberBand, dann die Erweiterung auf das gewählte Seitenverhältnis
+// (bevorzugt mit Pixeln des Originalbildes rund um den Zuschnitt).
 // PingPong-Kopien liefern das Bild ihres Originals.
 QPixmap VideoWidget::preparedFrame(int index) const
 {
     index = sourceIndex(index);
     if (index < 0 || index >= m_bigMap.size()) return QPixmap();
 
-    QPixmap px = m_bigMap[index];
-    const QRect cropRect = m_label->cropRectInImageCoords();
-    if (!cropRect.isEmpty() && cropRect != px.rect())
+    const QPixmap &px = m_bigMap[index];
+    QRect cropRect = m_label->cropRectInImageCoords();
+    if (cropRect.isEmpty())
     {
-        px = px.copy(cropRect);
+        cropRect = px.rect();
     }
     bool transparentFill = false;
     switch (m_label->padFill())
@@ -1987,7 +1926,7 @@ QPixmap VideoWidget::preparedFrame(int index) const
     case Label::PadFill::Extend:      transparentFill = false; break;
     case Label::PadFill::Transparent: transparentFill = true;  break;
     }
-    return expandToRatio(px, m_label->padRatio(), transparentFill);
+    return expandToRatio(px, cropRect, m_label->padRatio(), transparentFill);
 }
 
 // Gleiche Rechnung wie preparedFrame(), nur auf den Maßen
@@ -2011,15 +1950,14 @@ QSize VideoWidget::preparedFrameSize(int index) const
 }
 
 QStringList VideoWidget::existingExportTargets(const QString &dir, const QString &base,
-                                               bool webm, bool mp4, bool gif, bool png,
-                                               Ratio ratio) const
+                                               bool webm, bool mp4, bool gif, bool png) const
 {
     QStringList targets;
     const QString stem = stripExportSuffix(dir + "/" + base);
     if (webm) targets << stem + ".webm";
     if (mp4)  targets << stem + ".mp4";
     if (gif)  targets << stem + ".gif";
-    if (png)  targets << spriteFileName(stem + ".png", ratio);
+    if (png)  targets << spriteFileName(stem + ".png");
 
     QStringList existing;
     for (const QString &t : targets)
@@ -2079,24 +2017,15 @@ void VideoWidget::saveVideo(const QString &path)
     exporter->exportFrames(toExport, opts);
 }
 
-void VideoWidget::saveSpriteSheet(const QString &path, Ratio ratio)
+void VideoWidget::saveSpriteSheet(const QString &path)
 {
     // Nur die ausgewählten Frames kommen ins Sheet
     const QList<int> keys = selectedKeys();
     if (keys.isEmpty()) return;
 
-    QPixmap grid;
-    if (ratio != RatioOriginal && keys.size() == 1)
-    {
-        // Einzelbild auf ein festes Seitenverhältnis erweitern
-        grid = padToRatio(preparedFrame(keys.first()), ratio);
-    }
-    else
-    {
-        grid = composeGrid(keys, findOptimalGrid(keys.size()), false);
-    }
+    const QPixmap grid = composeGrid(keys, findOptimalGrid(keys.size()), false);
 
-    const QString pathExt = spriteFileName(path, ratio);
+    const QString pathExt = spriteFileName(path);
     if (grid.save(pathExt))
     {
         // QSettings().setValue("save/dir", QFileInfo(path).absolutePath());

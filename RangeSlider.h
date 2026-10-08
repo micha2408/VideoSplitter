@@ -18,6 +18,8 @@ signals:
     void lowerValueChanged(int);
     void upperValueChanged(int);
     void rangeChanged(int lower, int upper);
+    // Griff genau getroffen (ohne Wertänderung); value = Position des Griffs
+    void handlePressed(int value);
 
 protected:
     void paintEvent(QPaintEvent* ev) override;
@@ -26,8 +28,10 @@ protected:
     void mouseReleaseEvent(QMouseEvent* ev) override;
 
 private:
-    enum HandleType { NoHandle, LowerHandle, UpperHandle };
+    enum HandleType { NoHandle, LowerHandle, UpperHandle, BothHandles };
     HandleType m_activeHandle = NoHandle;
+    int m_clickOffset = 0;   // Abstand des Klickpunkts zur linken Griffkante
+    int m_pressPos    = 0;   // Klickposition bei übereinanderliegenden Griffen
 
     int m_lower = 0;
     int m_upper = 100;

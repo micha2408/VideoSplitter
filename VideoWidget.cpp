@@ -20,6 +20,7 @@
 #include <QSettings>
 #include <QFileInfo>
 #include <QKeyEvent>
+#include <QApplication>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QFile>
@@ -285,10 +286,6 @@ VideoWidget::VideoWidget(QWidget *parent)
     m_sortSlider->setValue(1);
     m_labelSpeed  = new QLabel("– ms", topPart);
     m_speedSlider = new QSlider(Qt::Horizontal, topPart);
-    m_revers = new QCheckBox(topPart);
-    m_revers->setText("rev");
-    m_revers->setCheckable(true);
-    m_revers->setCheckState(Qt::Unchecked);
     m_speedSlider->setMaximumWidth(80);
     m_speedSlider->setRange(10, 200);
     m_speedSlider->setValue(40);
@@ -303,7 +300,6 @@ VideoWidget::VideoWidget(QWidget *parent)
     ctrlLayout->addWidget(m_sortSlider);
     ctrlLayout->addWidget(m_labelSpeed);
     ctrlLayout->addWidget(m_speedSlider);
-    ctrlLayout->addWidget(m_revers);
     mainLayout->addLayout(ctrlLayout);
 
     // Protokoll ganz unten – beim Start ausgeblendet
@@ -329,14 +325,14 @@ VideoWidget::VideoWidget(QWidget *parent)
     connect(m_label, &Label::rightClicked, this, &VideoWidget::toggleView);
     connect(m_label, &Label::cropChanged,  this, [this]
             {
-                if (m_paused || m_playTimer.isActive() == false)
-                    showFrame(m_playIndex);
+                if (!m_playTimer.isActive())
+                    displayCurrent();
             });
     m_playTimer.setTimerType(Qt::PreciseTimer);
-    m_previewTimer.setTimerType(Qt::PreciseTimer);
-    connect(&m_previewTimer, &QTimer::timeout, this, &VideoWidget::previewTick);
+    qApp->installEventFilter(this);
     connect(&m_playTimer,    &QTimer::timeout, this, &VideoWidget::playTick);
     connect(m_rangeSlider, &RangeSlider::lowerValueChanged, this, &VideoWidget::lowerValueChanged);
+    connect(m_rangeSlider, &RangeSlider::handlePressed,     this, &VideoWidget::showSliderPreview);
     connect(m_rangeSlider, &RangeSlider::upperValueChanged, this, &VideoWidget::upperValueChanged);
     connect(m_sortSlider,  &QSlider::valueChanged,          this, &VideoWidget::sortValueChanged);
     connect(m_speedSlider, &QSlider::valueChanged,          this, &VideoWidget::speedValueChanged);
@@ -357,21 +353,37 @@ void VideoWidget::toggleView()
     if (m_bigMap.isEmpty()) return;
     m_showingGrid = !m_showingGrid;
     m_stack->setCurrentIndex(m_showingGrid ? 1 : 0);
+    // Wiedergabe und Bildposition laufen in beiden Ansichten weiter
     if (m_showingGrid)
     {
-        m_playTimer.stop();
         paintGrid();
     }
     else
     {
-        m_previewTimer.stop();
-        if (!m_fillingMap) startPlayback();
-        // updateTitle() wird von startPlayback() aufgerufen
+        displayCurrent();
+        updateTitle();
     }
 }
 
 bool VideoWidget::eventFilter(QObject *obj, QEvent *event)
 {
+    // Pfeiltasten im Hauptfenster abfangen, bevor ein Schieberegler sie bekommt
+    if (event->type() == QEvent::KeyPress
+        || event->type() == QEvent::MouseButtonPress
+        || event->type() == QEvent::MouseButtonDblClick)
+    {
+        const QWidget *w = qobject_cast<QWidget *>(obj);
+        if (w && w->window() == this)
+        {
+            // Vorschau eines Reglergriffs endet mit jeder anderen Aktion
+            if (obj != m_rangeSlider) endSliderPreview();
+            if (event->type() == QEvent::KeyPress
+                && handleNavigationKey(static_cast<QKeyEvent *>(event)->key()))
+            {
+                return true;
+            }
+        }
+    }
     if ((obj == m_gridLabel || obj == m_previewLabel)
         && event->type() == QEvent::MouseButtonRelease)
     {
@@ -443,19 +455,22 @@ void VideoWidget::togglePause()
 {
     if (m_fillingMap || m_bigMap.isEmpty()) return;
     m_paused = !m_paused;
+    // Steuert Video und Grid-Vorschau gleichermaßen; die Position bleibt erhalten
     if (m_paused)
     {
         m_playTimer.stop();
     }
     else
     {
-        // Fortsetzung an aktueller Position; nur außerhalb des Bereichs vom unteren Griff
-        const int src = sourceIndex(m_playIndex);
-        if (src < m_rangeSlider->lowerValue() || src >= m_rangeSlider->upperValue())
-            m_playIndex = m_rangeSlider->lowerValue();
-        m_playTimer.start(qMax(1, m_delay * m_sortSlider->value()));
+        restartPlayTimer();
     }
     updateTitle();
+}
+
+void VideoWidget::restartPlayTimer()
+{
+    if (m_fillingMap || m_paused || m_bigMap.isEmpty()) return;
+    m_playTimer.start(qMax(1, m_delay * m_sortSlider->value()));
 }
 
 void VideoWidget::reduceMinMax()
@@ -474,7 +489,6 @@ void VideoWidget::reduceMinMax()
         m_pingEnabled = m_pingEnabled.mid(lower, newCount);
 
     m_playTimer.stop();
-    m_previewTimer.stop();
 
     // Aktuelle Position relativ zum neuen Bereich erhalten
     m_playIndex = qBound(0, sourceIndex(m_playIndex) - lower, newCount - 1);
@@ -505,10 +519,9 @@ void VideoWidget::reduceMinMax()
     }
     else
     {
-        showFrame(m_playIndex);
-        if (!m_paused)
-            m_playTimer.start(qMax(1, m_delay * newSort));
+        displayCurrent();
     }
+    restartPlayTimer();
     updateTitle();
 }
 
@@ -521,69 +534,144 @@ void VideoWidget::keyPressEvent(QKeyEvent *event)
         QMainWindow::keyPressEvent(event);
 }
 
+// Pfeiltasten bewegen in der Pause die aktuelle Bildposition. Sie werden hier
+// abgefangen, bevor ein Schieberegler mit Fokus sie verarbeiten kann.
+bool VideoWidget::handleNavigationKey(int key)
+{
+    if (key != Qt::Key_Left && key != Qt::Key_Right
+        && key != Qt::Key_Up && key != Qt::Key_Down)
+    {
+        return false;
+    }
+    if (!m_paused || m_fillingMap || m_bigMap.isEmpty()) return true;
+
+    int next = -1;
+    switch (key)
+    {
+    case Qt::Key_Right: next = nextActiveKey(m_playIndex, +1); break;
+    case Qt::Key_Left:  next = nextActiveKey(m_playIndex, -1); break;
+    case Qt::Key_Up:    if (m_showingGrid) next = rowTargetKey(-1); break;
+    case Qt::Key_Down:  if (m_showingGrid) next = rowTargetKey(+1); break;
+    }
+    if (next >= 0 && next != m_playIndex)
+    {
+        m_playIndex = next;
+        displayCurrent();
+    }
+    return true;
+}
+
+// Nächster ausgewählter Frame in Richtung dir (±1), in der Reihenfolge des
+// Bereichs und mit Umlauf am Ende. Liegt "from" außerhalb des Bereichs, geht es
+// am Anfang bzw. am Ende los. -1 = kein Frame ausgewählt.
+int VideoWidget::nextActiveKey(int from, int dir) const
+{
+    const QList<int> keys = rangeKeys();
+    const int n = keys.size();
+    if (n == 0) return -1;
+
+    int pos = keys.indexOf(from);
+    if (pos < 0) pos = dir > 0 ? n - 1 : 0;
+    for (int i = 1; i <= n; ++i)
+    {
+        const int k = keys[((pos + dir * i) % n + n) % n];
+        if (frameEnabled(k)) return k;
+    }
+    return -1;
+}
+
+// Gleiche Spalte eine Zeile höher (dir = -1) bzw. tiefer (+1) im angezeigten
+// Grid, mit Umlauf. Ist dieser Frame abgewählt, geht es von dort aus zum
+// vorigen (hoch) bzw. nächsten (runter) ausgewählten Frame weiter.
+int VideoWidget::rowTargetKey(int dir) const
+{
+    const int n    = m_displayKeys.size();
+    const int cols = qMax(1, m_displayGrid.cols);
+    const int pos  = m_displayKeys.indexOf(m_playIndex);
+    if (n == 0) return -1;
+    if (pos < 0) return nextActiveKey(m_playIndex, dir);
+
+    int target = pos + dir * cols;
+    if (target < 0)
+    {
+        // von oben in die letzte belegte Zeile derselben Spalte
+        target = pos + ((n - 1 - pos) / cols) * cols;
+    }
+    else if (target >= n)
+    {
+        target = pos % cols;   // von unten zurück in die erste Zeile
+    }
+    const int key = m_displayKeys[target];
+    return frameEnabled(key) ? key : nextActiveKey(key, dir);
+}
+
 void VideoWidget::startPlayback()
 {
-    m_playIndex = m_rangeSlider->lowerValue();
-    if (!m_paused)
-        m_playTimer.start(qMax(1, m_delay * m_sortSlider->value()));
+    m_playIndex = nextActiveKey(-1, +1);
+    if (m_playIndex < 0) m_playIndex = m_rangeSlider->lowerValue();
+    displayCurrent();
+    restartPlayTimer();
     updateTitle();
+}
+
+// In der Pause zeigt ein verschobener bzw. angeklickter Griff des Bereichsreglers
+// sein Bild als Vorschau – im Video statt des aktuellen Bildes, im Grid rechts in
+// der Vorschau. Bildposition und Rahmen bleiben dabei unverändert.
+void VideoWidget::showSliderPreview(int index)
+{
+    if (!m_paused || m_fillingMap || index < 0 || index >= m_bigMap.size()) return;
+    m_sliderPreview = index;
+    if (m_showingGrid)
+    {
+        updatePreview(index);
+        return;
+    }
+    m_label->setImage(preparedFrame(index), index, m_bigMap.size(), m_delay);
+    m_label->update();
+}
+
+// Jede andere Aktion holt das aktuelle Bild zurück
+void VideoWidget::endSliderPreview()
+{
+    if (m_sliderPreview >= 0) displayCurrent();
+}
+
+// Liegt die Bildposition nach einer Änderung von Bereich oder Schrittweite nicht
+// mehr im Bereich, springt sie auf den ersten ausgewählten Frame.
+void VideoWidget::keepPlayIndexInRange()
+{
+    if (rangeKeys().contains(m_playIndex)) return;
+    const int next = nextActiveKey(m_playIndex, +1);
+    if (next >= 0) m_playIndex = next;
+}
+
+// Aktuellen Frame anzeigen: im Video das Bild, im Grid Vorschau und Rahmen
+void VideoWidget::displayCurrent()
+{
+    m_sliderPreview = -1;
+    if (m_bigMap.isEmpty()) return;
+    if (m_showingGrid)
+    {
+        updatePreview(m_playIndex);
+        drawGridMarker();
+        return;
+    }
+    // Label und Slider kennen nur die Quellframes (PingPong-Kopien → Original)
+    const int src = sourceIndex(m_playIndex);
+    if (src < 0 || src >= m_bigMap.size()) return;
+    m_label->setImage(preparedFrame(m_playIndex), src, m_bigMap.size(), m_delay);
+    m_label->update();
+    m_rangeSlider->setValue(src);   // blauen Balken mitlaufen lassen
 }
 
 void VideoWidget::playTick()
 {
-    // Nur die ausgewählten Frames abspielen – so wie sie auch exportiert werden
-    const QList<int> keys = selectedKeys();
-    if (keys.isEmpty()) return;
-
-    // Position in der Liste; liegt der Index daneben (Slider bewegt, Frame
-    // abgewählt), mit dem nächsten ausgewählten Frame weitermachen
-    int pos = keys.indexOf(m_playIndex);
-    if (pos < 0)
-    {
-        pos = 0;
-        while (pos < keys.size() && keys[pos] < m_playIndex) ++pos;
-        if (pos >= keys.size()) pos = 0;
-    }
-    m_playIndex = keys[pos];
-
-    // Label und Slider kennen nur die Quellframes (PingPong-Kopien → Original)
-    const int src = sourceIndex(m_playIndex);
-    m_label->setImage(preparedFrame(m_playIndex), src, m_bigMap.size(), m_delay);
-    m_label->update();
-
-    m_rangeSlider->setValue(src);   // blauen Balken mit Wiedergabe mitlaufen lassen
-
-    const int lastPos = keys.size() - 1;
-    if(m_revers->isChecked())
-    {
-        if(m_isReversed)
-        {
-            --pos;
-            if (pos < 0)
-            {
-                pos = 0;
-                m_isReversed = false;
-            }
-        }
-        else
-        {
-            ++pos;
-            if (pos > lastPos)
-            {
-                pos = lastPos;
-                m_isReversed = true;
-            }
-        }
-    }
-    else
-    {
-        ++pos;
-        if (pos > lastPos)
-        {
-            pos = 0;
-        }
-    }
-    m_playIndex = keys[pos];
+    // Nur die ausgewählten Frames abspielen – so wie sie auch exportiert werden.
+    // Liegt die Position außerhalb des Bereichs, geht es am Anfang weiter.
+    const int next = nextActiveKey(m_playIndex, +1);
+    if (next < 0) return;
+    m_playIndex = next;
+    displayCurrent();
 }
 
 // ─── Grid composing ─────────────────────────────────────────────────────────
@@ -700,7 +788,6 @@ QPixmap VideoWidget::composeGrid(const QList<int> &keys, const GridDims &g, bool
 void VideoWidget::paintGrid()
 {
     if (m_bigMap.isEmpty()) return;
-    auto sliders = getSliderValues();
 
     // Angezeigt werden alle Frames des Bereichs, damit sich abgewählte Frames
     // per Klick wieder aufnehmen lassen
@@ -708,13 +795,12 @@ void VideoWidget::paintGrid()
     m_displayGrid = findOptimalGrid(m_displayKeys.size());
     QList<QPixmap> prepared;
     m_gridPixmap = composeGrid(m_displayKeys, m_displayGrid, true, &prepared);
-    fitGridPixmap();
 
-    // Vorschau zeigt nur die ausgewählten Frames, in der Zellgröße des Export-Sheets
-    m_previewList.clear();
+    // Aufbereitete Frames für die Vorschau merken
+    m_previewFrames.clear();
     for (int i = 0; i < m_displayKeys.size(); ++i)
     {
-        if (frameEnabled(m_displayKeys[i])) m_previewList << prepared[i];
+        m_previewFrames.insert(m_displayKeys[i], prepared[i]);
     }
     const QList<int> sel = selectedKeys();
     m_grid     = findOptimalGrid(sel.size());
@@ -727,20 +813,9 @@ void VideoWidget::paintGrid()
             .arg(QString::number(cellAspect, 'f', 2))
             .arg(m_grid.cols * m_grid.rows - sel.size()));
 
-    // Start preview animation
-    m_previewIndex = 0;
-    if (!m_previewList.isEmpty())
-    {
-        m_previewLabel->setPixmap(m_previewList[0].scaled(
-            m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        const int interval = qMax(1, m_delay * sliders.step);
-        m_previewTimer.start(interval);
-    }
-    else
-    {
-        m_previewTimer.stop();
-        m_previewLabel->clear();
-    }
+    m_sliderPreview = -1;
+    fitGridPixmap();
+    updatePreview(m_playIndex);
 }
 
 // Grid in das Label einpassen und seine Lage für die Klick-Auswertung merken
@@ -748,18 +823,69 @@ void VideoWidget::fitGridPixmap()
 {
     if (m_gridPixmap.isNull())
     {
+        m_gridScaled   = QPixmap();
         m_gridDrawRect = QRect();
         return;
     }
 
-    const QPixmap scaled = m_gridPixmap.scaled(
+    m_gridScaled = m_gridPixmap.scaled(
         m_gridLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    m_gridLabel->setPixmap(scaled);
 
     // QLabel zentriert die Pixmap (AlignCenter)
-    const int x0 = (m_gridLabel->width()  - scaled.width())  / 2;
-    const int y0 = (m_gridLabel->height() - scaled.height()) / 2;
-    m_gridDrawRect = QRect(QPoint(x0, y0), scaled.size());
+    const int x0 = (m_gridLabel->width()  - m_gridScaled.width())  / 2;
+    const int y0 = (m_gridLabel->height() - m_gridScaled.height()) / 2;
+    m_gridDrawRect = QRect(QPoint(x0, y0), m_gridScaled.size());
+    drawGridMarker();
+}
+
+// Aktuellen Frame im Grid farbig umrahmen. Der Rahmen kommt erst auf die
+// skalierte Pixmap, damit er unabhängig von der Größe gleich dick ist.
+void VideoWidget::drawGridMarker()
+{
+    if (m_gridScaled.isNull()) return;
+
+    QPixmap marked = m_gridScaled;
+    const int shown = m_displayKeys.indexOf(m_playIndex);
+    if (shown >= 0)
+    {
+        const int col = shown % m_displayGrid.cols;
+        const int row = shown / m_displayGrid.cols;
+        const int x1  = col       * marked.width()  / m_displayGrid.cols;
+        const int x2  = (col + 1) * marked.width()  / m_displayGrid.cols;
+        const int y1  = row       * marked.height() / m_displayGrid.rows;
+        const int y2  = (row + 1) * marked.height() / m_displayGrid.rows;
+        constexpr int kPen = 3;
+        QPainter p(&marked);
+        p.setPen(QPen(QColor(255, 160, 0), kPen, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
+        p.drawRect(QRect(x1, y1, x2 - x1, y2 - y1)
+                       .adjusted(kPen / 2, kPen / 2, -(kPen + 1) / 2, -(kPen + 1) / 2));
+    }
+    m_gridLabel->setPixmap(marked);
+}
+
+// Vorschau eines Frames in der Zellgröße des Export-Sheets
+void VideoWidget::updatePreview(int key)
+{
+    if (m_cellSize.isEmpty() || selectedKeys().isEmpty())
+    {
+        m_previewLabel->clear();
+        return;
+    }
+    const auto it = m_previewFrames.constFind(key);
+    const QPixmap frame = it != m_previewFrames.constEnd() ? *it : preparedFrame(key);
+    if (frame.isNull())
+    {
+        m_previewLabel->clear();
+        return;
+    }
+
+    // Scale to actual sprite-sheet cell size (= real quality in SL texture)
+    const QPixmap cellSized = frame.scaled(
+        m_cellSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+
+    // Upscale without smoothing → pixelation visible = honest quality preview
+    m_previewLabel->setPixmap(cellSized.scaled(
+        m_previewLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
 }
 
 int VideoWidget::gridKeyAt(const QPoint &pos) const
@@ -787,11 +913,14 @@ void VideoWidget::setFrameEnabled(int index, bool on)
 
 // ─── Slider slots ───────────────────────────────────────────────────────────
 
-void VideoWidget::showFrame(int index)
+// Bereich oder Schrittweite geändert: die Wiedergabe bzw. Pause bleibt wie sie
+// ist, nur eine nicht mehr gültige Bildposition rückt in den Bereich
+void VideoWidget::onRangeChanged()
 {
-    if (index < 0 || index >= m_bigMap.size()) return;
-    m_label->setImage(preparedFrame(index), index, m_bigMap.size(), m_delay);
-    m_label->update();
+    if (m_fillingMap || m_bigMap.isEmpty()) return;
+    keepPlayIndexInRange();
+    if (m_showingGrid) paintGrid();
+    else               displayCurrent();
 }
 
 void VideoWidget::lowerValueChanged(int value)
@@ -803,19 +932,8 @@ void VideoWidget::lowerValueChanged(int value)
         return;
     }
     m_lastHandle = LowerHandle;
-    if (m_showingGrid)
-    {
-        paintGrid();
-    }
-    else if (!m_fillingMap)
-    {
-        // Slider bewegt → automatisch pausieren und Frame zeigen
-        m_paused = true;
-        m_playTimer.stop();
-        m_playIndex = value;
-        m_rangeSlider->setValue(value);   // blauen Balken mitziehen
-        showFrame(value);
-    }
+    onRangeChanged();
+    showSliderPreview(value);
     updateTitle();
 }
 
@@ -828,19 +946,8 @@ void VideoWidget::upperValueChanged(int value)
         return;
     }
     m_lastHandle = UpperHandle;
-    if (m_showingGrid)
-    {
-        paintGrid();
-    }
-    else if (!m_fillingMap)
-    {
-        // Slider bewegt → automatisch pausieren und Frame zeigen
-        m_paused = true;
-        m_playTimer.stop();
-        m_playIndex = value;
-        m_rangeSlider->setValue(value);   // blauen Balken mitziehen
-        showFrame(value);
-    }
+    onRangeChanged();
+    showSliderPreview(value);
     updateTitle();
 }
 
@@ -849,10 +956,8 @@ void VideoWidget::sortValueChanged(int value)
     const int maxSort = qMax(1, (m_rangeSlider->upperValue()
                                  - m_rangeSlider->lowerValue() + 1) / 2);
     m_labelSort->setText(QString("%1/%2").arg(value).arg(maxSort));
-    if (m_showingGrid)
-        paintGrid();
-    else if (!m_fillingMap && !m_paused)
-        m_playTimer.start(qMax(1, m_delay * value));
+    onRangeChanged();
+    if (m_playTimer.isActive()) restartPlayTimer();
     updateTitle();
 }
 
@@ -860,31 +965,9 @@ void VideoWidget::speedValueChanged(int value)
 {
     m_delay = value;
     m_labelSpeed->setText(QString("%1 ms").arg(value));
-    if (m_showingGrid)
-        paintGrid();
-    else if (!m_fillingMap && !m_paused)
-        m_playTimer.start(qMax(1, m_delay * m_sortSlider->value()));
+    endSliderPreview();
+    if (m_playTimer.isActive()) restartPlayTimer();
     updateTitle();
-}
-
-// ─── Preview animation ───────────────────────────────────────────────────────
-
-void VideoWidget::previewTick()
-{
-    if (m_previewList.isEmpty()) return;
-    m_previewIndex = (m_previewIndex + 1) % m_previewList.size();
-
-    const QSize cell = m_cellSize.isEmpty()
-                           ? QSize(m_resolution / m_grid.cols, m_resolution / m_grid.rows)
-                           : m_cellSize;
-
-    // Scale to actual sprite-sheet cell size (= real quality in SL texture)
-    const QPixmap cellSized = m_previewList[m_previewIndex].scaled(
-        cell, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-
-    // Upscale without smoothing → pixelation visible = honest quality preview
-    m_previewLabel->setPixmap(cellSized.scaled(
-        m_previewLabel->size(), Qt::KeepAspectRatio, Qt::FastTransformation));
 }
 
 // ─── Drag & Drop ────────────────────────────────────────────────────────────
@@ -990,7 +1073,6 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
     resetExportNameForVideo(path); // neues Video → Dateiname-Vorgabe neu setzen
     m_label->setDefaults();
     m_alphaCache.clear();
-    m_previewTimer.stop();
     m_playTimer.stop();
     if (m_extractor) { m_extractor->cancel(); m_extractor->deleteLater(); m_extractor = nullptr; }
     if (m_bgRemover) { m_bgRemover->cancel(); m_bgRemover->deleteLater(); m_bgRemover = nullptr; }
@@ -1000,7 +1082,8 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
     m_bigMap.clear();
     m_frameEnabled.clear();
     m_pingEnabled.clear();
-    m_previewList.clear();
+    m_previewFrames.clear();
+    m_playIndex   = 0;
     m_delay       = 0;
     m_fillingMap  = true;
     m_paused      = false;
@@ -1145,8 +1228,7 @@ void VideoWidget::onFramesExtracted(QVector<QPixmap> frames, int delayMs)
     m_fillingMap = false;
     m_actBgRemove->setEnabled(true);
 
-    // Erstes Bild anzeigen
-    showFrame(0);
+    // Erstes Bild anzeigen und Wiedergabe starten
     startPlayback();
 }
 
@@ -1293,12 +1375,7 @@ void VideoWidget::onBgFinished()
         paintGrid();
     else
     {
-        const int cur = m_rangeSlider->lowerValue();
-        if (cur >= 0 && cur < m_bigMap.size())
-        {
-            m_label->setImage(preparedFrame(cur), cur, m_bigMap.size(), m_delay);
-            m_label->update();
-        }
+        displayCurrent();
     }
 }
 

@@ -77,16 +77,12 @@ private:
     RangeSlider    *m_rangeSlider;
     QSlider        *m_sortSlider;
     QSlider        *m_speedSlider;
-    QCheckBox      *m_revers;
-    bool           m_isReversed = false;
-    // Grid preview animation
-    QList<QPixmap> m_previewList;
-    QTimer         m_previewTimer;
-    int            m_previewIndex = 0;
+    // Grid-Vorschau: aufbereitete Frames des angezeigten Grids (Schlüssel → Bild)
+    QHash<int, QPixmap> m_previewFrames;
 
     // Playback
     QTimer       m_playTimer;
-    int          m_playIndex   = 0;
+    int          m_playIndex   = 0;    // aktuelle Bildposition (Schlüssel, ggf. PingPong-Kopie)
     bool         m_paused      = false;
     enum ActiveHandle { NoHandle, LowerHandle, UpperHandle };
     ActiveHandle m_lastHandle  = NoHandle;
@@ -195,7 +191,12 @@ private:
     GridDims         m_displayGrid = {1,1};
     QList<int>       m_displayKeys;
     QRect            m_gridDrawRect;   // Lage des skalierten Grids im Label
+    QPixmap          m_gridScaled;     // skaliertes Grid ohne Rahmen
     void fitGridPixmap();
+    // Rahmen um den aktuellen Frame auf das skalierte Grid zeichnen
+    void drawGridMarker();
+    // Vorschau rechts neben dem Grid auf den aktuellen Frame setzen
+    void updatePreview(int key);
     // Frame unter der Mausposition im Grid-Label, -1 = keiner
     int  gridKeyAt(const QPoint &pos) const;
     void setFrameEnabled(int index, bool on);
@@ -236,7 +237,21 @@ private:
     void paintGrid();
     void startPlayback();
     void updateTitle();
-    void showFrame(int index);
+    // Aktuellen Frame anzeigen (Video: Bild, Grid: Vorschau und Rahmen)
+    void displayCurrent();
+    void restartPlayTimer();
+    // Nächster ausgewählter Frame in Richtung dir (±1), mit Umlauf; -1 = keiner
+    int  nextActiveKey(int from, int dir) const;
+    // Ziel der Pfeiltasten hoch (dir = -1) / runter (+1) im Grid
+    int  rowTargetKey(int dir) const;
+    // Pfeiltasten in der Pause; true = Taste verbraucht
+    bool handleNavigationKey(int key);
+    void keepPlayIndexInRange();
+    // Vorschau des Bildes an einem Griff des Bereichsreglers (nur in der Pause)
+    int  m_sliderPreview = -1;   // angezeigter Vorschau-Frame, -1 = keiner
+    void showSliderPreview(int index);
+    void endSliderPreview();
+    void onRangeChanged();
     void reduceMinMax();
 
 private slots:
@@ -245,7 +260,6 @@ private slots:
     void upperValueChanged(int value);
     void sortValueChanged(int value);
     void speedValueChanged(int value);
-    void previewTick();
     void playTick();
     void togglePause();
     void startBgRemoval();

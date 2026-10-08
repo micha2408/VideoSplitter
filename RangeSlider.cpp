@@ -1,5 +1,4 @@
 #include "RangeSlider.h"
-#include "qdebug.h"
 #include <QStyle>
 #include <QStyleOptionSlider>
 #include <QMouseEvent>
@@ -37,20 +36,23 @@ int RangeSlider::pick(const QPoint& pt) const {
     return orientation() == Qt::Horizontal ? pt.x() : pt.y();
 }
 
-int RangeSlider::pixelPosToRangeValue(int pos) const {
+// Pixelposition der linken Griffkante → Wert, gerundet wie in QSlider
+int RangeSlider::pixelPosToRangeValue(int pos) const
+{
     QStyleOptionSlider opt;
     initStyleOption(&opt);
 
-    QRect gr = style()->subControlRect(QStyle::CC_Slider, &opt,
-                                       QStyle::SC_SliderGroove, this);
-    QRect sr = style()->subControlRect(QStyle::CC_Slider, &opt,
-                                       QStyle::SC_SliderHandle, this);
+    const QRect gr = style()->subControlRect(QStyle::CC_Slider, &opt,
+                                             QStyle::SC_SliderGroove, this);
+    const QRect sr = style()->subControlRect(QStyle::CC_Slider, &opt,
+                                             QStyle::SC_SliderHandle, this);
+    const bool horizontal = orientation() == Qt::Horizontal;
+    const int  length     = horizontal ? sr.width() : sr.height();
+    const int  sliderMin  = horizontal ? gr.x() : gr.y();
+    const int  sliderMax  = (horizontal ? gr.right() : gr.bottom()) - length + 1;
 
-    int sliderMin = gr.left();
-    int sliderMax = gr.right() - sr.width() + 1;
-
-    double normalized = double(pos - sliderMin) / double(sliderMax - sliderMin);
-    return minimum() + normalized * (maximum() - minimum());
+    return QStyle::sliderValueFromPosition(minimum(), maximum(), pos - sliderMin,
+                                           sliderMax - sliderMin, opt.upsideDown);
 }
 
 QRect RangeSlider::handleRect(int value) const {
@@ -81,68 +83,90 @@ void RangeSlider::paintEvent(QPaintEvent*) {
     style()->drawComplexControl(QStyle::CC_Slider, &opt, &p, this);
 }
 
-void RangeSlider::mousePressEvent(QMouseEvent* ev) {
-    int pos = pick(ev->pos());
+// Klick genau auf einen Griff: Griff ziehen und seine Position melden.
+// Links vom unteren Griff: unterer Griff 1 nach links, rechts vom oberen Griff:
+// oberer Griff 1 nach rechts. Dazwischen rückt der näher liegende Griff um 1
+// auf den Klick zu.
+void RangeSlider::mousePressEvent(QMouseEvent* ev)
+{
+    if (ev->button() != Qt::LeftButton)
+    {
+        ev->ignore();
+        return;
+    }
+    ev->accept();
 
-    QRect lowerRect = handleRect(m_lower);
-    QRect upperRect = handleRect(m_upper);
-    int middle = (lowerRect.right() + upperRect.left()) / 2;
-    if(ev->pos().x() < lowerRect.left())
+    const QPoint pt        = ev->position().toPoint();
+    const int    pos       = pick(pt);
+    const QRect  lowerRect = handleRect(m_lower);
+    const QRect  upperRect = handleRect(m_upper);
+    const bool   onLower   = lowerRect.contains(pt);
+    const bool   onUpper   = upperRect.contains(pt);
+    m_activeHandle = NoHandle;
+
+    if (onLower || onUpper)
     {
-        if(lowerValue()>0) setLowerValue(lowerValue()-1);
-    } else
-    {
-        if(ev->pos().x() > lowerRect.right())
+        if (onLower && onUpper)
         {
-            if(ev->pos().x() < middle)
-            {
-                if((lowerValue()+1)<=upperValue()) setLowerValue(lowerValue()+1);
-            } else
-            {
-                if(ev->pos().x() < upperRect.left())
-                {
-                    if((upperValue()-1)>=lowerValue()) setUpperValue(upperValue()-1);
-                } else
-                {
-                    if(ev->pos().x() < upperRect.right())
-                    {
-                        if(upperValue()<maximum()) setUpperValue(upperValue()-1);
-                    }
-                }
-            }
+            // Griffe liegen übereinander: Richtung der ersten Bewegung entscheidet
+            m_activeHandle = BothHandles;
+            m_clickOffset  = pos - pick(lowerRect.topLeft());
+            m_pressPos     = pos;
         }
-    }
-    if(ev->pos().x() > upperRect.right())
-    {
-        if(upperValue()+1<maximum()) setUpperValue(upperValue()+1);
-    }
-
-    if (lowerRect.contains(ev->pos()))
-        m_activeHandle = LowerHandle;
-    else if (upperRect.contains(ev->pos()))
-        m_activeHandle = UpperHandle;
-    else
-        m_activeHandle = NoHandle;
-    qDebug() << m_activeHandle;
-    QSlider::mousePressEvent(ev);
-}
-
-void RangeSlider::mouseMoveEvent(QMouseEvent* ev) {
-    if (m_activeHandle == NoHandle) {
-        QSlider::mouseMoveEvent(ev);
+        else
+        {
+            m_activeHandle = onLower ? LowerHandle : UpperHandle;
+            m_clickOffset  = pos - pick((onLower ? lowerRect : upperRect).topLeft());
+        }
+        emit handlePressed(onLower ? m_lower : m_upper);
         return;
     }
 
-    int pos = pick(ev->pos());
-    int val = pixelPosToRangeValue(pos);
+    const int lowerStart = pick(lowerRect.topLeft());
+    const int upperEnd   = pick(upperRect.bottomRight());
+    if (pos < lowerStart)
+    {
+        setLowerValue(m_lower - 1);
+    }
+    else if (pos > upperEnd)
+    {
+        setUpperValue(m_upper + 1);
+    }
+    else
+    {
+        const int lowerCenter = pick(lowerRect.center());
+        const int upperCenter = pick(upperRect.center());
+        if (pos - lowerCenter <= upperCenter - pos)
+            setLowerValue(m_lower + 1);
+        else
+            setUpperValue(m_upper - 1);
+    }
+}
 
+void RangeSlider::mouseMoveEvent(QMouseEvent* ev)
+{
+    if (m_activeHandle == NoHandle)
+    {
+        ev->ignore();
+        return;
+    }
+
+    const int pos = pick(ev->position().toPoint());
+    if (m_activeHandle == BothHandles)
+    {
+        if (pos == m_pressPos) return;
+        m_activeHandle = pos < m_pressPos ? LowerHandle : UpperHandle;
+    }
+
+    const int val = pixelPosToRangeValue(pos - m_clickOffset);
     if (m_activeHandle == LowerHandle)
         setLowerValue(val);
-    else if (m_activeHandle == UpperHandle)
+    else
         setUpperValue(val);
 }
 
-void RangeSlider::mouseReleaseEvent(QMouseEvent* ev) {
+void RangeSlider::mouseReleaseEvent(QMouseEvent* ev)
+{
     m_activeHandle = NoHandle;
-    QSlider::mouseReleaseEvent(ev);
+    ev->accept();
 }

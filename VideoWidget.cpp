@@ -1,6 +1,7 @@
 ﻿#include "VideoWidget.h"
 #include "Label.h"
 #include "RangeSlider.h"
+#include "StepSlider.h"
 #include "ComfyBgRemover.h"
 #include "VideoExporter.h"
 #include "FrameExtractor.h"
@@ -280,12 +281,12 @@ VideoWidget::VideoWidget(QWidget *parent)
     m_rangeSlider = new RangeSlider(topPart, Qt::Horizontal);
     m_labelUpper  = new QLabel("–",   topPart);
     m_labelSort   = new QLabel("–",   topPart);
-    m_sortSlider  = new QSlider(Qt::Horizontal, topPart);
+    m_sortSlider  = new StepSlider(Qt::Horizontal, topPart);
     m_sortSlider->setMaximumWidth(80);
     m_sortSlider->setMinimum(1);
     m_sortSlider->setValue(1);
     m_labelSpeed  = new QLabel("– ms", topPart);
-    m_speedSlider = new QSlider(Qt::Horizontal, topPart);
+    m_speedSlider = new StepSlider(Qt::Horizontal, topPart);
     m_speedSlider->setMaximumWidth(80);
     m_speedSlider->setRange(10, 200);
     m_speedSlider->setValue(40);

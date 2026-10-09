@@ -18,6 +18,8 @@ qt_add_executable(${PROJECT_NAME} ${WIN32_FLAG}
     VideoWidget.h
     RangeSlider.cpp
     RangeSlider.h
+    StepSlider.cpp
+    StepSlider.h
     Label.cpp
     Label.h
     ComfyBgRemover.cpp

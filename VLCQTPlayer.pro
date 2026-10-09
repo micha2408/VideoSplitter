@@ -7,6 +7,7 @@ TARGET   = VideoConverter
 SOURCES += \
     Label.cpp \
     RangeSlider.cpp \
+    StepSlider.cpp \
     main.cpp \
     VideoWidget.cpp \
     ComfyBgRemover.cpp \
@@ -17,6 +18,7 @@ SOURCES += \
 HEADERS += \
     Label.h \
     RangeSlider.h \
+    StepSlider.h \
     VideoWidget.h \
     ComfyBgRemover.h \
     VideoExporter.h \

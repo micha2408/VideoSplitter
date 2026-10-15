@@ -391,6 +391,13 @@ bool VideoWidget::eventFilter(QObject *obj, QEvent *event)
         const QMouseEvent *me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::RightButton)
         {
+            // Rechtsklick auf ein Einzelbild macht es vor dem Wechsel zur
+            // aktuellen Bildposition – das Video zeigt dann genau dieses Bild
+            if (obj == m_gridLabel)
+            {
+                const int key = gridKeyAt(me->position().toPoint());
+                if (key >= 0) m_playIndex = key;
+            }
             toggleView();
             return true;
         }

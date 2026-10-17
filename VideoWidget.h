@@ -12,11 +12,12 @@
 #include <QElapsedTimer>
 #include <QActionGroup>
 #include <QPixmap>
+#include <QPolygonF>
 #include <QFileDialog>
 #include <QSettings>
 #include <QCheckBox>
+#include "Label.h"
 
-class Label;
 class RangeSlider;
 class QStackedWidget;
 class ComfyBgRemover;
@@ -228,6 +229,12 @@ private:
     // Auswahl); Pixel des Originalbildes außerhalb des Ausschnitts gehen vor Rand
     QPixmap expandToRatio(const QPixmap &src, const QRect &crop, const QSize &ratio,
                           bool transparentFill) const;
+    // Bereich des Originalbildes, den expandToRatio() übernimmt
+    static QRect grownRect(const QSize &src, const QRect &crop, const QSize &target);
+    // Linke obere Ecke des aufbereiteten Bildes im Quellframe
+    QPoint preparedOrigin(int index) const;
+    // Radierstriche (Koordinaten des aufbereiteten Bildes) auf die Frames anwenden
+    void applyErase(const Label::EraseMask &global, const QHash<int, Label::EraseMask> &perFrame);
     // Enthält der Quellframe transparente Pixel? (Ergebnis wird gemerkt)
     bool frameHasTransparency(int index) const;
     // Quellframe mit Zuschnitt und Seitenverhältnis-Erweiterung

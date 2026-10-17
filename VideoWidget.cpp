@@ -324,6 +324,7 @@ VideoWidget::VideoWidget(QWidget *parent)
 
     // Connections
     connect(m_label, &Label::rightClicked, this, &VideoWidget::toggleView);
+    connect(m_label, &Label::eraseApplied, this, &VideoWidget::applyErase);
     connect(m_label, &Label::cropChanged,  this, [this]
             {
                 if (!m_playTimer.isActive())
@@ -463,6 +464,7 @@ void VideoWidget::togglePause()
 {
     if (m_fillingMap || m_bigMap.isEmpty()) return;
     m_paused = !m_paused;
+    m_label->setErasePerFrame(m_paused);
     // Steuert Video und Grid-Vorschau gleichermaßen; die Position bleibt erhalten
     if (m_paused)
     {
@@ -1095,6 +1097,7 @@ void VideoWidget::doDropEvent(const QString &pathAndUrl)
     m_delay       = 0;
     m_fillingMap  = true;
     m_paused      = false;
+    m_label->setErasePerFrame(false);
     m_lastHandle  = NoHandle;
     m_showingGrid = false;
     m_stack->setCurrentIndex(0);
@@ -1958,8 +1961,16 @@ QPixmap VideoWidget::expandToRatio(const QPixmap &src, const QRect &crop,
     const QSize target = ratio.scaled(crop.size(), Qt::KeepAspectRatioByExpanding);
     if (target.isEmpty() || target == crop.size()) return cropped;
 
-    // Je Achse: Box mittig um den Ausschnitt legen und so verschieben, dass sie
-    // im Originalbild bleibt. Ist das Bild kürzer als die Box, ganz übernehmen.
+    const QPixmap grown = src.copy(grownRect(src.size(), crop, target));
+    if (grown.size() == target) return grown;
+
+    return QPixmap::fromImage(padCentered(grown.toImage(), target, transparentFill));
+}
+
+// Je Achse: Box mittig um den Ausschnitt legen und so verschieben, dass sie
+// im Originalbild bleibt. Ist das Bild kürzer als die Box, ganz übernehmen.
+QRect VideoWidget::grownRect(const QSize &src, const QRect &crop, const QSize &target)
+{
     auto span = [](int start, int len, int want, int total) -> QPair<int, int>
     {
         if (want >= total) return { 0, total };
@@ -1967,10 +1978,64 @@ QPixmap VideoWidget::expandToRatio(const QPixmap &src, const QRect &crop,
     };
     const auto [x, w] = span(crop.x(), crop.width(),  target.width(),  src.width());
     const auto [y, h] = span(crop.y(), crop.height(), target.height(), src.height());
-    const QPixmap grown = src.copy(x, y, w, h);
-    if (grown.size() == target) return grown;
+    return QRect(x, y, w, h);
+}
 
-    return QPixmap::fromImage(padCentered(grown.toImage(), target, transparentFill));
+// Gleiche Rechnung wie preparedFrame(): Lage der linken oberen Ecke des
+// aufbereiteten Bildes im Quellframe (negativ, wenn außen aufgefüllt wird)
+QPoint VideoWidget::preparedOrigin(int index) const
+{
+    index = sourceIndex(index);
+    if (index < 0 || index >= m_bigMap.size()) return QPoint();
+
+    const QSize srcSize = m_bigMap[index].size();
+    QRect crop = m_label->cropRectInImageCoords();
+    if (crop.isEmpty()) crop = QRect(QPoint(), srcSize);
+    const QSize ratio = m_label->padRatio();
+    if (ratio.isEmpty()) return crop.topLeft();
+
+    const QSize target = ratio.scaled(crop.size(), Qt::KeepAspectRatioByExpanding);
+    if (target.isEmpty() || target == crop.size()) return crop.topLeft();
+
+    const QRect grown = grownRect(srcSize, crop, target);
+    return grown.topLeft() - QPoint((target.width()  - grown.width())  / 2,
+                                    (target.height() - grown.height()) / 2);
+}
+
+// Radierung des Labels auf die Quellframes übertragen: die globale Maske auf
+// alle Bilder des Bereichs, die Bildmasken nur auf ihr jeweiliges Bild
+void VideoWidget::applyErase(const Label::EraseMask &global,
+                             const QHash<int, Label::EraseMask> &perFrame)
+{
+    if (m_bigMap.isEmpty()) return;
+
+    QHash<int, Label::EraseMask> masks;
+    if (!global.isEmpty())
+    {
+        for (int key : rangeKeys()) masks[sourceIndex(key)] = global;
+    }
+    for (auto it = perFrame.cbegin(); it != perFrame.cend(); ++it)
+    {
+        masks[it.key()] += it.value();
+    }
+
+    for (auto it = masks.cbegin(); it != masks.cend(); ++it)
+    {
+        const int i = it.key();
+        if (i < 0 || i >= m_bigMap.size()) continue;
+        QImage img = m_bigMap[i].toImage().convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        QPainter p(&img);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setCompositionMode(QPainter::CompositionMode_Clear);
+        p.translate(preparedOrigin(i));
+        Label::drawEraseStrokes(p, it.value());
+        p.end();
+        m_bigMap[i] = QPixmap::fromImage(img);
+    }
+    logMessage(QString("Radiert: %1 Frame(s)").arg(masks.size()));
+
+    if (m_showingGrid) paintGrid();
+    else               displayCurrent();
 }
 
 // Die Transparenz-Prüfung läuft über das ganze Bild, deshalb wird das Ergebnis

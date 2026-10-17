@@ -325,6 +325,14 @@ VideoWidget::VideoWidget(QWidget *parent)
     // Connections
     connect(m_label, &Label::rightClicked, this, &VideoWidget::toggleView);
     connect(m_label, &Label::eraseApplied, this, &VideoWidget::applyErase);
+    connect(m_label, &Label::eraseModeChanged, this, &VideoWidget::updateTitle);
+    // Vorschau des Wiederherstellens: Original vor "Hintergrund entfernen"/Radieren
+    m_label->setOriginalProvider([this](int index, QPoint *origin)
+                                 {
+                                     if (index < 0 || index >= m_bigMapBackup.size()) return QPixmap();
+                                     *origin = preparedOrigin(index);
+                                     return m_bigMapBackup[index];
+                                 });
     connect(m_label, &Label::cropChanged,  this, [this]
             {
                 if (!m_playTimer.isActive())
@@ -379,10 +387,10 @@ bool VideoWidget::eventFilter(QObject *obj, QEvent *event)
         {
             // Vorschau eines Reglergriffs endet mit jeder anderen Aktion
             if (obj != m_rangeSlider) endSliderPreview();
-            if (event->type() == QEvent::KeyPress
-                && handleNavigationKey(static_cast<QKeyEvent *>(event)->key()))
+            if (event->type() == QEvent::KeyPress)
             {
-                return true;
+                const QKeyEvent *ke = static_cast<QKeyEvent *>(event);
+                if (handleNavigationKey(ke->key()) || handleToolKey(ke)) return true;
             }
         }
     }
@@ -542,6 +550,21 @@ void VideoWidget::keyPressEvent(QKeyEvent *event)
         togglePause();
     else
         QMainWindow::keyPressEvent(event);
+}
+
+// Werkzeuge der Videoansicht: R radiert, W stellt wieder her (im Modus jeweils
+// Umschalten), A wählt das Seitenverhältnis
+bool VideoWidget::handleToolKey(const QKeyEvent *ke)
+{
+    if (ke->modifiers() & ~Qt::KeypadModifier) return false;
+    const int key = ke->key();
+    if (key != Qt::Key_R && key != Qt::Key_W && key != Qt::Key_A) return false;
+    if (m_showingGrid || m_fillingMap || m_bigMap.isEmpty() || ke->isAutoRepeat()) return true;
+
+    if (key == Qt::Key_A) m_label->openRatioDialog();
+    else m_label->startEraseMode(key == Qt::Key_R ? Label::EraseTool::Erase
+                                                  : Label::EraseTool::Restore);
+    return true;
 }
 
 // Pfeiltasten bewegen in der Pause die aktuelle Bildposition. Sie werden hier
@@ -1250,7 +1273,13 @@ void VideoWidget::updateTitle()
     if (m_fillingMap || m_bigMap.isEmpty()) return;
     auto sliders = getSliderValues();
     const double fps = sliders.step > 0 && m_delay > 0 ? 1000.0 / (m_delay * sliders.step) : 0.0;
-    const QString status = m_paused ? "  ⏸ PAUSE" : "";
+    QString status = m_paused ? "  ⏸ PAUSE" : "";
+    if (m_label->isErasing())
+    {
+        status += m_label->eraseTool() == Label::EraseTool::Restore
+                      ? "  |  ↺ WIEDERHERSTELLEN (R: Radieren, Esc: Menü)"
+                      : "  |  ✎ RADIEREN (W: Wiederherstellen, Esc: Menü)";
+    }
     setWindowTitle(QString("VideoConverter  —  [%1 … %2]  step %3  |  %6*%7  |  %8/%9 Frames  |  %4 fps%5")
                        .arg(sliders.first).arg(sliders.last).arg(sliders.step)
                        .arg(fps, 0, 'f', 1).arg(status)
@@ -2026,13 +2055,15 @@ void VideoWidget::applyErase(const Label::EraseMask &global,
         QImage img = m_bigMap[i].toImage().convertToFormat(QImage::Format_ARGB32_Premultiplied);
         QPainter p(&img);
         p.setRenderHint(QPainter::Antialiasing, true);
-        p.setCompositionMode(QPainter::CompositionMode_Clear);
-        p.translate(preparedOrigin(i));
-        Label::drawEraseStrokes(p, it.value());
+        const QPoint origin = preparedOrigin(i);
+        p.translate(origin);
+        // Wiederherstellen holt die Pixel aus dem Stand vor "Hintergrund entfernen"
+        const QPixmap original = i < m_bigMapBackup.size() ? m_bigMapBackup[i] : QPixmap();
+        Label::paintStrokes(p, it.value(), original, -origin);
         p.end();
         m_bigMap[i] = QPixmap::fromImage(img);
     }
-    logMessage(QString("Radiert: %1 Frame(s)").arg(masks.size()));
+    logMessage(QString("Radieren/Wiederherstellen angewendet: %1 Frame(s)").arg(masks.size()));
 
     if (m_showingGrid) paintGrid();
     else               displayCurrent();

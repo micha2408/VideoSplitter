@@ -253,6 +253,8 @@ private:
     int  rowTargetKey(int dir) const;
     // Pfeiltasten in der Pause; true = Taste verbraucht
     bool handleNavigationKey(int key);
+    // R, W und A in der Videoansicht
+    bool handleToolKey(const QKeyEvent *ke);
     void keepPlayIndexInRange();
     // Vorschau des Bildes an einem Griff des Bereichsreglers (nur in der Pause)
     int  m_sliderPreview = -1;   // angezeigter Vorschau-Frame, -1 = keiner

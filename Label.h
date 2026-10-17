@@ -8,6 +8,8 @@
 #include <QRubberBand>
 #include <QPolygonF>
 #include <QHash>
+#include <QPixmap>
+#include <functional>
 
 class QPainter;
 
@@ -41,6 +43,7 @@ public:
         endErase();
         rubberBand = nullptr;
         origin=QPoint();
+        m_cropPending=false;
         m_imageCropRect=QRect();
         m_cropBeforeClick=QRect();
         m_padBeforeClick=QSize();
@@ -51,15 +54,32 @@ public:
     }
     bool isErasing() const { return m_erasing; }
 
-    // Ein Radierstrich in Koordinaten des angezeigten (aufbereiteten) Bildes
+    // Werkzeug im Radiermodus: Pixel entfernen oder aus dem Original zurückholen
+    enum class EraseTool { Erase, Restore };
+    EraseTool eraseTool() const { return m_eraseTool; }
+    // R bzw. W: Modus mit diesem Werkzeug starten oder im Modus umschalten
+    void startEraseMode(EraseTool tool);
+    // A: Seitenverhältnis-Dialog an der Mausposition
+    void openRatioDialog();
+
+    // Ein Strich in Koordinaten des angezeigten (aufbereiteten) Bildes
     struct EraseStroke
     {
         QPolygonF points;
-        qreal     radius = 0;
+        qreal     radius  = 0;
+        bool      restore = false;   // true = Wiederherstellen statt Radieren
     };
     using EraseMask = QList<EraseStroke>;
-    // Radierstriche zeichnen (Kompositionsmodus setzt der Aufrufer)
-    static void drawEraseStrokes(QPainter &p, const EraseMask &mask);
+    // Striche der Reihe nach zeichnen: Radieren macht durchsichtig,
+    // Wiederherstellen übernimmt die Pixel von original, dessen linke obere
+    // Ecke in Strich-Koordinaten bei originalPos liegt
+    static void paintStrokes(QPainter &p, const EraseMask &mask,
+                             const QPixmap &original, const QPointF &originalPos);
+
+    // Liefert zum Quellindex das Original und die Lage des aufbereiteten
+    // Bildes darin (für die Vorschau des Wiederherstellens)
+    using OriginalProvider = std::function<QPixmap(int index, QPoint *preparedOrigin)>;
+    void setOriginalProvider(OriginalProvider provider) { m_originalProvider = std::move(provider); }
 
     // Pause: neue Striche gelten nur für das angezeigte Bild,
     // Wiedergabe: für alle Bilder des Bereichs
@@ -74,12 +94,14 @@ protected:
 private:
     void showRatioDialog(const QPoint &globalPos);
     void restoreBeforeClick();
-    // Radierer: Strg+Linksklick startet, erneut Strg+Linksklick oder Esc fragt nach
-    void beginErase(const QPointF &pos);
+    // Radierer: R oder W startet, Esc fragt nach, wie es weitergeht
+    void beginErase(EraseTool tool);
+    // Neuen Strich mit dem aktuellen Werkzeug an der Radierer-Position beginnen
+    void startStroke();
     void endErase();
     // Masken an VideoWidget übergeben und den Modus verlassen
     void applyAndEndErase();
-    // Strg+Linksklick bzw. Esc im Radiermodus: Popup-Menü, wie es weitergeht
+    // Esc im Radiermodus: Popup-Menü, wie es weitergeht
     void showEraseMenu(const QPoint &globalPos);
     // Maske, die für das angezeigte Bild gilt (alle Bilder + nur dieses Bild)
     EraseMask currentMask() const;
@@ -104,6 +126,10 @@ private:
     } imagePlus;
     QRubberBand *rubberBand = nullptr;
     QPoint origin;
+    // Linke Taste gedrückt, Zuschnitt beginnt erst nach kurzer Mausbewegung
+    bool   m_cropPending = false;
+    // Zuschnitt aufziehen: alten Stand merken und das unveränderte Bild zeigen
+    void beginCropDrag();
     QRect m_imageCropRect;
     QRect m_cropBeforeClick;
     QSize m_padBeforeClick;
@@ -114,6 +140,8 @@ private:
     // Radierer; Striche und Radius in Bildkoordinaten
     bool                   m_erasing       = false;
     bool                   m_erasePerFrame = false;
+    EraseTool              m_eraseTool     = EraseTool::Erase;
+    OriginalProvider       m_originalProvider;
     // Ziel des laufenden Strichs: kNoStroke, kGlobalStroke oder Quellindex
     static constexpr int   kNoStroke       = -2;
     static constexpr int   kGlobalStroke   = -1;
@@ -126,6 +154,8 @@ signals:
     void sendPic(Label *l);
     void rightClicked();
     void cropChanged();
+    // Radiermodus betreten/verlassen oder Werkzeug gewechselt
+    void eraseModeChanged();
     // Radierung ausführen: global auf alle Bilder des Bereichs, perFrame je Quellindex
     void eraseApplied(const Label::EraseMask &global, const QHash<int, Label::EraseMask> &perFrame);
 };

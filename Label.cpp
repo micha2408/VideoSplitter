@@ -12,35 +12,27 @@
 #include <QMenu>
 #include <QWheelEvent>
 #include <cmath>
+#include <algorithm>
 
 void Label::mousePressEvent(QMouseEvent *ev)
 {
     if (ev->button() != Qt::LeftButton) return;
-    const bool ctrl = ev->modifiers() & Qt::ControlModifier;
     if (m_erasing)
     {
-        if (ctrl)
-        {
-            // Erneutes Strg+Linksklick: nachfragen, wie es weitergeht
-            showEraseMenu(ev->globalPosition().toPoint());
-            return;
-        }
-        m_eraserPos    = clampToWidget(ev->position());
-        m_strokeTarget = m_erasePerFrame ? imagePlus.index : kGlobalStroke;
-        EraseMask &mask = m_strokeTarget == kGlobalStroke
-                              ? m_globalMask : m_frameMasks[m_strokeTarget];
-        mask << EraseStroke{ QPolygonF{ toImage(m_eraserPos) }, m_eraseRadius };
+        m_eraserPos = clampToWidget(ev->position());
+        startStroke();
         update();
         return;
     }
-    if (ctrl)
-    {
-        beginErase(ev->position());
-        return;
-    }
-    // Zuschnitt nur noch mit Shift+Linksklick, ein einfacher Klick tut nichts
-    if (!(ev->modifiers() & Qt::ShiftModifier)) return;
-    origin = ev->pos();
+    // Zuschnitt mit Linksklick; ein Klick ohne Aufziehen tut nichts
+    origin        = ev->pos();
+    m_cropPending = !imagePlus.image.isNull();
+}
+
+// Erst wenn die Maus sich bewegt, wird aus dem Klick ein Zuschnitt
+void Label::beginCropDrag()
+{
+    m_cropPending = false;
     if (!rubberBand)
         rubberBand = new QRubberBand(QRubberBand::Rectangle, this);
     // Stand fuer "Abbrechen" im Auswahldialog merken
@@ -53,6 +45,15 @@ void Label::mousePressEvent(QMouseEvent *ev)
     emit cropChanged();
     rubberBand->setGeometry(QRect(origin, QSize()));
     rubberBand->show();
+}
+
+void Label::startStroke()
+{
+    m_strokeTarget = m_erasePerFrame ? imagePlus.index : kGlobalStroke;
+    EraseMask &mask = m_strokeTarget == kGlobalStroke
+                          ? m_globalMask : m_frameMasks[m_strokeTarget];
+    mask << EraseStroke{ QPolygonF{ toImage(m_eraserPos) }, m_eraseRadius,
+                         m_eraseTool == EraseTool::Restore };
 }
 
 void Label::mouseMoveEvent(QMouseEvent *ev)
@@ -69,6 +70,11 @@ void Label::mouseMoveEvent(QMouseEvent *ev)
         update();
         return;
     }
+    if (m_cropPending && (ev->buttons() & Qt::LeftButton)
+        && (ev->pos() - origin).manhattanLength() >= QApplication::startDragDistance())
+    {
+        beginCropDrag();
+    }
     if (rubberBand && rubberBand->isVisible())
         rubberBand->setGeometry(QRect(origin, ev->pos()).normalized());
 }
@@ -77,7 +83,7 @@ void Label::keyPressEvent(QKeyEvent *ev)
 {
     if (m_erasing && ev->key() == Qt::Key_Escape)
     {
-        // Wie Strg+Linksklick: nachfragen, wie es weitergeht
+        // Nachfragen, wie es weitergeht
         showEraseMenu(QCursor::pos());
         return;
     }
@@ -111,16 +117,18 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
         emit rightClicked();
         return;
     }
-    if (ev->button() != Qt::LeftButton || !rubberBand || !rubberBand->isVisible()) return;
+    if (ev->button() != Qt::LeftButton) return;
+    m_cropPending = false;
+    if (!rubberBand || !rubberBand->isVisible()) return;
     rubberBand->hide();
-    m_newSel = QRect(origin, ev->pos()).normalized();
-    if (m_newSel.width() < 8 || m_newSel.height() < 8)
+    const QRect drawn = QRect(origin, ev->pos()).normalized();
+    if (drawn.width() < 8 || drawn.height() < 8)
     {
-        // Klick ohne Aufziehen: Grundstellung oder festes Seitenverhaeltnis waehlen
-        m_newSel = QRect();
-        showRatioDialog(mapToGlobal(ev->pos()));
+        // Zu kleine Auswahl: alles bleibt, wie es war
+        restoreBeforeClick();
         return;
     }
+    m_newSel = drawn;
 
     QSize s;
     scale(s.rwidth(), s.rheight());
@@ -141,8 +149,17 @@ void Label::mouseReleaseEvent(QMouseEvent *ev)
     emit cropChanged();
 }
 
-// Auswahl nach einem einfachen Linksklick: Grundstellung oder ein festes
-// Seitenverhaeltnis, auf das das Bild erweitert wird. [Abbrechen] aendert nichts.
+// Taste A: Seitenverhaeltnis waehlen, ein vorhandener Zuschnitt bleibt erhalten
+void Label::openRatioDialog()
+{
+    if (m_erasing || imagePlus.image.isNull()) return;
+    m_cropBeforeClick = m_imageCropRect;
+    m_padBeforeClick  = m_padRatio;
+    showRatioDialog(QCursor::pos());
+}
+
+// Auswahl ueber Taste A: Grundstellung oder ein festes Seitenverhaeltnis,
+// auf das das Bild erweitert wird. [Abbrechen] aendert nichts.
 void Label::showRatioDialog(const QPoint &globalPos)
 {
     if (imagePlus.image.isNull())
@@ -225,8 +242,8 @@ void Label::showRatioDialog(const QPoint &globalPos)
     if (m_padRatio.isEmpty()) m_newSel = QRect();
 }
 
-// mousePressEvent() loescht Zuschnitt und Erweiterung schon beim Druecken der
-// Taste. Wird der Dialog abgebrochen, muss dieser Stand zurueck.
+// beginCropDrag() und der Dialog aendern Zuschnitt und Erweiterung vorab. Wird
+// abgebrochen oder zu klein aufgezogen, muss der alte Stand zurueck.
 void Label::restoreBeforeClick()
 {
     m_imageCropRect = m_cropBeforeClick;
@@ -259,14 +276,21 @@ void Label::paintEvent(QPaintEvent *e)
     const EraseMask mask = m_erasing ? currentMask() : EraseMask();
     if (!mask.isEmpty())
     {
-        // Vorschau: radierte Stellen werden durchsichtig
+        // Vorschau: radierte Stellen werden durchsichtig, wiederhergestellte
+        // zeigen wieder das Original
+        QPixmap original;
+        QPoint  origin;
+        const bool anyRestore = std::any_of(mask.cbegin(), mask.cend(),
+                                            [](const EraseStroke &s) { return s.restore; });
+        if (anyRestore && m_originalProvider)
+            original = m_originalProvider(imagePlus.index, &origin);
         QImage img = scaled.toImage().convertToFormat(QImage::Format_ARGB32_Premultiplied);
         QPainter ip(&img);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setCompositionMode(QPainter::CompositionMode_Clear);
+        ip.setRenderHint(QPainter::SmoothPixmapTransform, true);
         const qreal f = static_cast<qreal>(scaled.width()) / imagePlus.image.width();
         ip.scale(f, f);
-        drawEraseStrokes(ip, mask);
+        paintStrokes(ip, mask, original, -origin);
         ip.end();
         p.drawImage(x, y, img);
     }
@@ -284,19 +308,40 @@ void Label::paintEvent(QPaintEvent *e)
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(Qt::black, 1));
         p.drawEllipse(m_eraserPos, r + 1, r + 1);
-        p.setPen(QPen(Qt::white, 1));
+        // Wiederherstellen: grüner statt weißer Kreis
+        p.setPen(QPen(m_eraseTool == EraseTool::Restore ? Qt::green : Qt::white, 1));
         p.drawEllipse(m_eraserPos, r, r);
     }
 }
 
-void Label::drawEraseStrokes(QPainter &p, const EraseMask &mask)
+void Label::paintStrokes(QPainter &p, const EraseMask &mask,
+                         const QPixmap &original, const QPointF &originalPos)
 {
+    // Musterpinsel mit dem Original, ausgerichtet auf seine Lage im Bild
+    QBrush restoreBrush(original);
+    restoreBrush.setTransform(QTransform::fromTranslate(originalPos.x(), originalPos.y()));
+    // Außerhalb des Originals (hinzugefügter Rand) gibt es nichts wiederherzustellen
+    const QRectF originalRect(originalPos, original.size());
+
     p.setBrush(Qt::NoBrush);
     for (const EraseStroke &s : mask)
     {
-        p.setPen(QPen(Qt::black, 2 * s.radius, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        if (s.restore && original.isNull()) continue;
+        p.save();
+        if (s.restore)
+        {
+            p.setClipRect(originalRect, Qt::IntersectClip);
+            p.setCompositionMode(QPainter::CompositionMode_Source);
+            p.setPen(QPen(restoreBrush, 2 * s.radius, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        }
+        else
+        {
+            p.setCompositionMode(QPainter::CompositionMode_Clear);
+            p.setPen(QPen(Qt::black, 2 * s.radius, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        }
         if (s.points.size() == 1) p.drawPoint(s.points.first());
         else                      p.drawPolyline(s.points);
+        p.restore();
     }
 }
 
@@ -329,21 +374,53 @@ QPointF Label::clampToWidget(const QPointF &pos)
     return clamped;
 }
 
-void Label::beginErase(const QPointF &pos)
+void Label::startEraseMode(EraseTool tool)
+{
+    if (!m_erasing)
+    {
+        beginErase(tool);
+        return;
+    }
+    if (tool == m_eraseTool) return;
+    m_eraseTool = tool;
+    // Bei gedrückter Taste geht es mit dem neuen Werkzeug als neuer Strich weiter
+    if (m_strokeTarget != kNoStroke) startStroke();
+    update();
+    emit eraseModeChanged();
+}
+
+void Label::beginErase(EraseTool tool)
 {
     if (imagePlus.image.isNull()) return;
+    // Laufendes Aufziehen eines Zuschnitts abbrechen
+    if (rubberBand && rubberBand->isVisible())
+    {
+        rubberBand->hide();
+        restoreBeforeClick();
+    }
+    m_cropPending  = false;
     m_erasing      = true;
+    m_eraseTool    = tool;
     m_strokeTarget = kNoStroke;
     m_globalMask.clear();
     m_frameMasks.clear();
     // Durchmesser etwa 20 % der kürzeren Bildseite
     m_eraseRadius  = 0.1 * qMin(imagePlus.image.width(), imagePlus.image.height());
-    m_eraserPos    = clampToWidget(pos);
+    // Steht die Maus nicht über dem Bild, springt sie in die Bildmitte
+    const QRect img = imageRect();
+    QPoint pos = mapFromGlobal(QCursor::pos());
+    if (!img.contains(pos))
+    {
+        pos = img.center();
+        QCursor::setPos(mapToGlobal(pos));
+    }
+    m_eraserPos    = pos;
     setMouseTracking(true);
     setCursor(Qt::BlankCursor);
     grabMouse();       // Bewegungen außerhalb kommen weiter hier an
     setFocus();        // für Esc
     update();
+    emit eraseModeChanged();
 }
 
 void Label::endErase()
@@ -357,6 +434,7 @@ void Label::endErase()
     unsetCursor();
     setMouseTracking(false);
     update();
+    emit eraseModeChanged();
 }
 
 void Label::applyAndEndErase()
@@ -377,15 +455,15 @@ void Label::showEraseMenu(const QPoint &globalPos)
 
     QMenu menu(this);
     QAction *discard = menu.addAction(tr("Verlassen ohne Anwenden"));
-    QAction *apply   = menu.addAction(m_erasePerFrame ? tr("Verlassen und alle Radierungen anwenden")
+    QAction *apply   = menu.addAction(m_erasePerFrame ? tr("Verlassen und alle Striche anwenden")
                                                       : tr("Verlassen und anwenden"));
     // Nur in der Pause gibt es eine Maske des einzelnen Bildes
     QAction *toAll   = m_erasePerFrame
                            ? menu.addAction(tr("Bildmaske auf alle Bilder des Ausschnitts übernehmen"))
                            : nullptr;
-    QAction *stay    = menu.addAction(tr("Radiermodus nicht verlassen"));
+    QAction *stay    = menu.addAction(tr("Im Modus bleiben"));
     menu.setActiveAction(stay);
-    // Esc oder Klick daneben liefert nullptr = im Radiermodus bleiben
+    // Esc oder Klick daneben liefert nullptr = im Modus bleiben
     const QAction *clicked = menu.exec(globalPos, stay);
 
     if (clicked == discard)

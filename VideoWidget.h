@@ -255,6 +255,9 @@ private:
     bool handleNavigationKey(int key);
     // R, W und A in der Videoansicht
     bool handleToolKey(const QKeyEvent *ke);
+    // Radieren (Key_R), Wiederherstellen (Key_W) oder Seitenverhältnis (Key_A)
+    // centerCursor: Radierer in der Bildmitte starten (Aufruf aus dem Menü)
+    void triggerTool(int key, bool centerCursor = false);
     void keepPlayIndexInRange();
     // Vorschau des Bildes an einem Griff des Bereichsreglers (nur in der Pause)
     int  m_sliderPreview = -1;   // angezeigter Vorschau-Frame, -1 = keiner

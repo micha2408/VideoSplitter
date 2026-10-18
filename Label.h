@@ -57,8 +57,9 @@ public:
     // Werkzeug im Radiermodus: Pixel entfernen oder aus dem Original zurückholen
     enum class EraseTool { Erase, Restore };
     EraseTool eraseTool() const { return m_eraseTool; }
-    // R bzw. W: Modus mit diesem Werkzeug starten oder im Modus umschalten
-    void startEraseMode(EraseTool tool);
+    // R bzw. W: Modus mit diesem Werkzeug starten oder im Modus umschalten;
+    // centerCursor setzt die Maus beim Start immer in die Bildmitte (Menü)
+    void startEraseMode(EraseTool tool, bool centerCursor = false);
     // A: Seitenverhältnis-Dialog an der Mausposition
     void openRatioDialog();
 
@@ -95,7 +96,7 @@ private:
     void showRatioDialog(const QPoint &globalPos);
     void restoreBeforeClick();
     // Radierer: R oder W startet, Esc fragt nach, wie es weitergeht
-    void beginErase(EraseTool tool);
+    void beginErase(EraseTool tool, bool centerCursor);
     // Neuen Strich mit dem aktuellen Werkzeug an der Radierer-Position beginnen
     void startStroke();
     void endErase();

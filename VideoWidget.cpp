@@ -136,6 +136,11 @@ VideoWidget::VideoWidget(QWidget *parent)
     QAction *actPingPong = menuEdit->addAction("PingPong (rückwärts anhängen)");
     actPingPong->setCheckable(true);
     connect(actPingPong, &QAction::toggled, this, &VideoWidget::setPingPong);
+    menuEdit->addSeparator();
+    // Aus dem Menü startet der Radierer immer in der Bildmitte
+    menuEdit->addAction("Radieren  [R]",         this, [this] { triggerTool(Qt::Key_R, true); });
+    menuEdit->addAction("Wiederherstellen  [W]", this, [this] { triggerTool(Qt::Key_W, true); });
+    menuEdit->addAction("Seitenverhältnis …  [A]", this, [this] { triggerTool(Qt::Key_A); });
 
     QMenu *menuFx = new QMenu("Effekte", bar);
     bar->addMenu(menuFx);
@@ -559,12 +564,19 @@ bool VideoWidget::handleToolKey(const QKeyEvent *ke)
     if (ke->modifiers() & ~Qt::KeypadModifier) return false;
     const int key = ke->key();
     if (key != Qt::Key_R && key != Qt::Key_W && key != Qt::Key_A) return false;
-    if (m_showingGrid || m_fillingMap || m_bigMap.isEmpty() || ke->isAutoRepeat()) return true;
+    if (!ke->isAutoRepeat()) triggerTool(key);
+    return true;
+}
+
+// Gemeinsam für Tasten und Menü "Bearbeiten"; nur in der Videoansicht
+void VideoWidget::triggerTool(int key, bool centerCursor)
+{
+    if (m_showingGrid || m_fillingMap || m_bigMap.isEmpty()) return;
 
     if (key == Qt::Key_A) m_label->openRatioDialog();
     else m_label->startEraseMode(key == Qt::Key_R ? Label::EraseTool::Erase
-                                                  : Label::EraseTool::Restore);
-    return true;
+                                                  : Label::EraseTool::Restore,
+                                 centerCursor);
 }
 
 // Pfeiltasten bewegen in der Pause die aktuelle Bildposition. Sie werden hier

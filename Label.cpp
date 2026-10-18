@@ -374,11 +374,11 @@ QPointF Label::clampToWidget(const QPointF &pos)
     return clamped;
 }
 
-void Label::startEraseMode(EraseTool tool)
+void Label::startEraseMode(EraseTool tool, bool centerCursor)
 {
     if (!m_erasing)
     {
-        beginErase(tool);
+        beginErase(tool, centerCursor);
         return;
     }
     if (tool == m_eraseTool) return;
@@ -389,7 +389,7 @@ void Label::startEraseMode(EraseTool tool)
     emit eraseModeChanged();
 }
 
-void Label::beginErase(EraseTool tool)
+void Label::beginErase(EraseTool tool, bool centerCursor)
 {
     if (imagePlus.image.isNull()) return;
     // Laufendes Aufziehen eines Zuschnitts abbrechen
@@ -409,7 +409,7 @@ void Label::beginErase(EraseTool tool)
     // Steht die Maus nicht über dem Bild, springt sie in die Bildmitte
     const QRect img = imageRect();
     QPoint pos = mapFromGlobal(QCursor::pos());
-    if (!img.contains(pos))
+    if (centerCursor || !img.contains(pos))
     {
         pos = img.center();
         QCursor::setPos(mapToGlobal(pos));
